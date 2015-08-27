@@ -21,7 +21,7 @@ override_dh_clean:
 
 override_dh_auto_build:
 	dh_auto_build -O--buildsystem=python_distutils
-	/usr/share/openstack-pkg-tools/pkgos_insert_include ironic-discoverd.postinst
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-discoverd.postinst
 
 override_dh_install:
 	set -e ; for pyvers in $(PYTHONS); do \
