@@ -63,7 +63,8 @@ Description: discovering hardware properties for OpenStack Ironic - Python 2.7
 
 Package: ironic-discoverd
 Architecture: all
-Depends: python-ironic-discoverd (= ${binary:Version}),
+Depends: adduser,
+         python-ironic-discoverd (= ${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Description: discovering hardware properties for OpenStack Ironic - Daemon
