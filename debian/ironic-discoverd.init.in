@@ -16,3 +16,5 @@
 DESC="OpenStack Ironic Discoverd"
 PROJECT_NAME=ironic-discoverd
 NAME=${PROJECT_NAME}
+CONFIG_FILE=/etc/ironic-discoverd/discoverd.conf
+USE_LOGFILE=no
