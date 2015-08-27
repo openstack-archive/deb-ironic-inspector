@@ -11,7 +11,7 @@ export OSLO_PACKAGE_VERSION=$(VERSION)
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	python-coverage run --branch --include "ironic_discoverd*" -m unittest discover ironic_discoverd.test || true
+	PYTHONPATH=. python-coverage run --branch --include "ironic_discoverd*" -m unittest discover ironic_discoverd.test || true
 endif
 
 override_dh_clean:
