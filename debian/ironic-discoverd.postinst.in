@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -e
+
+#PKGOS-INCLUDE#
+
+if [ "${1}" = "configure" ] || [ "${1}" = "reconfigure" ] ; then
+	pkgos_var_user_group ironic-discoverd
+
+	pkgos_write_new_conf ironic-discoverd discoverd.conf
+fi
+
+#DEBHELPER#
+
+exit 0

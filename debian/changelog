@@ -1,0 +1,5 @@
+ironic-discoverd (1.1.0-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #797056)
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 27 Aug 2015 14:31:11 +0200
