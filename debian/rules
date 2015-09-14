@@ -2,7 +2,7 @@
 
 PYTHONS:=$(shell pyversions -vr)
 
-UPSTREAM_GIT = git://github.com/openstack/ironic-discoverd.git
+UPSTREAM_GIT = git://github.com/openstack/ironic-inspector.git
 include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
@@ -11,24 +11,24 @@ export OSLO_PACKAGE_VERSION=$(VERSION)
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	PYTHONPATH=. python-coverage run --branch --include "ironic_discoverd*" -m unittest discover ironic_discoverd.test || true
+	PYTHONPATH=. python-coverage run --branch --include "ironic_inspector*" -m unittest discover ironic_inspector.test || true
 endif
 
 override_dh_clean:
 	dh_clean -O--buildsystem=python_distutils
-	rm -rf build debian/ironic-discoverd.postinst
+	rm -rf build debian/ironic-inspector.postinst
 	rm -rf debian/*.upstart debian/*.service debian/*.init
 
 override_dh_auto_build:
 	dh_auto_build -O--buildsystem=python_distutils
-	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-discoverd.postinst
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-inspector.postinst
 
 override_dh_install:
 	set -e ; for pyvers in $(PYTHONS); do \
 		python$$pyvers setup.py install --install-layout=deb \
-			--root $(CURDIR)/debian/python-ironic-discoverd; \
+			--root $(CURDIR)/debian/python-ironic-inspector; \
 	done
-	install -D -m 0640 example.conf $(CURDIR)/debian/ironic-discoverd/usr/share/ironic-discoverd/discoverd.conf
+	install -D -m 0640 example.conf $(CURDIR)/debian/ironic-inspector/usr/share/ironic-inspector/inspector.conf
 
 # Commands not to run
 override_dh_installcatalogs:

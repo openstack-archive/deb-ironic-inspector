@@ -1,4 +1,4 @@
-Source: ironic-discoverd
+Source: ironic-inspector
 Section: python
 Priority: extra
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
@@ -26,11 +26,11 @@ Build-Depends-Indep: python-babel,
                      python-six (>= 1.9.0),
                      python-stevedore (>= 1.3.0),
 Standards-Version: 3.9.6
-Vcs-Git: git://anonscm.debian.org/openstack/ironic-discoverd.git
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/ironic-discoverd.git
-Homepage: https://github.com/openstack/ironic-discoverd
+Vcs-Git: git://anonscm.debian.org/openstack/ironic-inspector.git
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/ironic-inspector.git
+Homepage: https://github.com/openstack/ironic-inspector
 
-Package: python-ironic-discoverd
+Package: python-ironic-inspector
 Architecture: all
 Depends: python-babel,
          python-cliff (>= 1.10.0),
@@ -57,14 +57,14 @@ Description: discovering hardware properties for OpenStack Ironic - Python 2.7
  .
  A special discovery ramdisk is required to collect the information on a node.
  The default one can be built using diskimage-builder and
- ironic-discoverd-ramdisk element.
+ ironic-inspector-ramdisk element.
  .
  This package contains the Python 2.7 files.
 
-Package: ironic-discoverd
+Package: ironic-inspector
 Architecture: all
 Depends: adduser,
-         python-ironic-discoverd (= ${binary:Version}),
+         python-ironic-inspector (= ${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Description: discovering hardware properties for OpenStack Ironic - Daemon
@@ -76,6 +76,6 @@ Description: discovering hardware properties for OpenStack Ironic - Daemon
  .
  A special discovery ramdisk is required to collect the information on a node.
  The default one can be built using diskimage-builder and
- ironic-discoverd-ramdisk element.
+ ironic-inspector-ramdisk element.
  .
  This package contains the daemon.

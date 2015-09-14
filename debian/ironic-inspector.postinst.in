@@ -5,9 +5,9 @@ set -e
 #PKGOS-INCLUDE#
 
 if [ "${1}" = "configure" ] || [ "${1}" = "reconfigure" ] ; then
-	pkgos_var_user_group ironic-discoverd
+	pkgos_var_user_group ironic-inspector
 
-	pkgos_write_new_conf ironic-discoverd discoverd.conf
+	pkgos_write_new_conf ironic-inspector inspector.conf
 fi
 
 #DEBHELPER#
