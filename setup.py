@@ -1,61 +1,29 @@
-import re
+# Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from setuptools import setup
+# THIS FILE IS MANAGED BY THE GLOBAL REQUIREMENTS REPO - DO NOT EDIT
+import setuptools
 
-
+# In python < 2.7.4, a lazy loading of package `pbr` will break
+# setuptools if some other modules registered functions in `atexit`.
+# solution from: http://bugs.python.org/issue15881#msg170215
 try:
-    # Distributions have to delete *requirements.txt
-    with open('requirements.txt', 'r') as fp:
-        install_requires = [re.split(r'[<>=~]', line)[0]
-                            for line in fp if line.strip()]
-except EnvironmentError:
-    print("No requirements.txt, not handling dependencies")
-    install_requires = []
+    import multiprocessing  # noqa
+except ImportError:
+    pass
 
-
-with open('ironic_discoverd/__init__.py', 'rb') as fp:
-    exec(fp.read())
-
-
-setup(
-    name = "ironic-discoverd",
-    version = __version__,
-    description = open('README.rst', 'r').readline().strip(),
-    author = "Dmitry Tantsur",
-    author_email = "dtantsur@redhat.com",
-    url = "https://pypi.python.org/pypi/ironic-discoverd",
-    packages = ['ironic_discoverd', 'ironic_discoverd.plugins',
-                'ironic_discoverd.test', 'ironic_discoverd.common'],
-    install_requires = install_requires,
-    entry_points = {
-        'console_scripts': [
-            "ironic-discoverd = ironic_discoverd.main:main",
-        ],
-        'ironic_discoverd.hooks': [
-            "scheduler = ironic_discoverd.plugins.standard:SchedulerHook",
-            "validate_interfaces = ironic_discoverd.plugins.standard:ValidateInterfacesHook",
-            "ramdisk_error = ironic_discoverd.plugins.standard:RamdiskErrorHook",
-            "example = ironic_discoverd.plugins.example:ExampleProcessingHook",
-            "edeploy = ironic_discoverd.plugins.edeploy:eDeployHook",
-            "root_device_hint = ironic_discoverd.plugins.root_device_hint:RootDeviceHintHook",
-        ],
-        'openstack.cli.extension': [
-            'baremetal-introspection = ironic_discoverd.shell',
-        ],
-        'openstack.baremetal_introspection.v1': [
-            "baremetal_introspection_start = ironic_discoverd.shell:StartCommand",
-            "baremetal_introspection_status = ironic_discoverd.shell:StatusCommand",
-        ],
-        'oslo.config.opts': [
-            "ironic_discoverd = ironic_discoverd.conf:list_opts",
-        ],
-    },
-    classifiers = [
-        'Development Status :: 5 - Production/Stable',
-        'Environment :: OpenStack',
-        'Intended Audience :: System Administrators',
-        'License :: OSI Approved :: Apache Software License',
-        'Operating System :: POSIX',
-    ],
-    license = 'APL 2.0',
-)
+setuptools.setup(
+    setup_requires=['pbr>=1.3'],
+    pbr=True)
