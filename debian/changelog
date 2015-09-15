@@ -1,6 +1,8 @@
-ironic-inspector (1.1.0-2) UNRELEASED; urgency=medium
+ironic-inspector (2.1.0-1) experimental; urgency=medium
 
   * Follow upstream and rename the package as ironic-inspector.
+  * New upstream release.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 14 Sep 2015 18:24:07 +0200
 
