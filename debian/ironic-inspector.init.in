@@ -17,4 +17,4 @@ DESC="OpenStack Ironic Inspector"
 PROJECT_NAME=ironic-inspector
 NAME=${PROJECT_NAME}
 CONFIG_FILE=/etc/ironic-inspector/inspector.conf
-USE_LOGFILE=no
+#USE_LOGFILE=no
