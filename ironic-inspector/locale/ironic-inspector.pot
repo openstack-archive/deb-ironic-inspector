@@ -149,7 +149,7 @@ msgstr ""
 
 #: ironic_inspector/process.py:105
 #, python-format
-msgid "Unexpected exception during preprocessing in hook %s"
+msgid "Node UUID %s was found in cache, but is not found in Ironic"
 msgstr ""
 
 #: ironic_inspector/process.py:116
