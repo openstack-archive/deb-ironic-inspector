@@ -16,6 +16,7 @@ from oslo_config import cfg
 
 VALID_ADD_PORTS_VALUES = ('all', 'active', 'pxe')
 VALID_KEEP_PORTS_VALUES = ('all', 'present', 'added')
+VALID_STORE_DATA_VALUES = ('none', 'swift')
 
 
 IRONIC_OPTS = [
@@ -130,7 +131,8 @@ PROCESSING_OPTS = [
                      'tested feature, use at your own risk.',
                 deprecated_group='discoverd'),
     cfg.StrOpt('default_processing_hooks',
-               default='ramdisk_error,scheduler,validate_interfaces',
+               default='ramdisk_error,root_disk_selection,scheduler,'
+                       'validate_interfaces',
                help='Comma-separated list of default hooks for processing '
                     'pipeline. Hook \'scheduler\' updates the node with the '
                     'minimum properties required by the Nova scheduler. '
@@ -160,7 +162,22 @@ PROCESSING_OPTS = [
                default=None,
                help='The name of the hook to run when inspector receives '
                     'inspection information from a node it isn\'t already '
-                    'aware of. This hook is ignored by default.')
+                    'aware of. This hook is ignored by default.'),
+    cfg.StrOpt('store_data',
+               default='none',
+               choices=VALID_STORE_DATA_VALUES,
+               help='Method for storing introspection data. If set to \'none'
+                    '\', introspection data will not be stored.'),
+    cfg.StrOpt('store_data_location',
+               default=None,
+               help='Name of the key to store the location of stored data in '
+                    'the extra column of the Ironic database.'),
+    cfg.BoolOpt('disk_partitioning_spacing',
+                default=True,
+                help='Whether to leave 1 GiB of disk size untouched for '
+                     'partitioning. Only has effect when used with the IPA '
+                     'as a ramdisk, for older ramdisk local_gb is '
+                     'calculated on the ramdisk side.'),
 ]
 
 
@@ -228,6 +245,14 @@ SERVICE_OPTS = [
                default='^.*_ssh$',
                help='Only node with drivers matching this regular expression '
                'will be affected by introspection_delay setting.'),
+    cfg.ListOpt('ipmi_address_fields',
+                default=['ilo_address', 'drac_host', 'cimc_address'],
+                help='Ironic driver_info fields that are equivalent '
+                'to ipmi_address.'),
+    cfg.StrOpt('rootwrap_config',
+               default="/etc/ironic-inspector/rootwrap.conf",
+               help='Path to the rootwrap configuration file to use for '
+                    'running commands as root'),
 ]
 
 

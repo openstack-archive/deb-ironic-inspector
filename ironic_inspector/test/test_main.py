@@ -27,6 +27,7 @@ from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
 from ironic_inspector.plugins import example as example_plugin
 from ironic_inspector import process
+from ironic_inspector import rules
 from ironic_inspector.test import base as test_base
 from ironic_inspector import utils
 from oslo_config import cfg
@@ -113,11 +114,11 @@ class TestApiContinue(BaseAPITest):
     def test_continue(self, process_mock):
         # should be ignored
         CONF.set_override('auth_strategy', 'keystone')
-        process_mock.return_value = [42]
+        process_mock.return_value = {'result': 42}
         res = self.app.post('/v1/continue', data='"JSON"')
         self.assertEqual(200, res.status_code)
         process_mock.assert_called_once_with("JSON")
-        self.assertEqual(b'[42]', res.data)
+        self.assertEqual({"result": 42}, json.loads(res.data.decode()))
 
     @mock.patch.object(process, 'process', autospec=True)
     def test_continue_failed(self, process_mock):
@@ -148,6 +149,121 @@ class TestApiGetStatus(BaseAPITest):
         self.assertEqual(200, res.status_code)
         self.assertEqual({'finished': True, 'error': 'boom'},
                          json.loads(res.data.decode('utf-8')))
+
+
+class TestApiGetData(BaseAPITest):
+    @mock.patch.object(main.swift, 'SwiftAPI', autospec=True)
+    def test_get_introspection_data(self, swift_mock):
+        CONF.set_override('store_data', 'swift', 'processing')
+        data = {
+            'ipmi_address': '1.2.3.4',
+            'cpus': 2,
+            'cpu_arch': 'x86_64',
+            'memory_mb': 1024,
+            'local_gb': 20,
+            'interfaces': {
+                'em1': {'mac': '11:22:33:44:55:66', 'ip': '1.2.0.1'},
+            }
+        }
+        swift_conn = swift_mock.return_value
+        swift_conn.get_object.return_value = json.dumps(data)
+        res = self.app.get('/v1/introspection/%s/data' % self.uuid)
+        name = 'inspector_data-%s' % self.uuid
+        swift_conn.get_object.assert_called_once_with(name)
+        self.assertEqual(200, res.status_code)
+        self.assertEqual(data, json.loads(res.data.decode('utf-8')))
+
+    @mock.patch.object(main.swift, 'SwiftAPI', autospec=True)
+    def test_introspection_data_not_stored(self, swift_mock):
+        CONF.set_override('store_data', 'none', 'processing')
+        swift_conn = swift_mock.return_value
+        res = self.app.get('/v1/introspection/%s/data' % self.uuid)
+        self.assertFalse(swift_conn.get_object.called)
+        self.assertEqual(404, res.status_code)
+
+
+class TestApiRules(BaseAPITest):
+    @mock.patch.object(rules, 'get_all')
+    def test_get_all(self, get_all_mock):
+        get_all_mock.return_value = [
+            mock.Mock(spec=rules.IntrospectionRule,
+                      **{'as_dict.return_value': {'uuid': 'foo'}}),
+            mock.Mock(spec=rules.IntrospectionRule,
+                      **{'as_dict.return_value': {'uuid': 'bar'}}),
+        ]
+
+        res = self.app.get('/v1/rules')
+        self.assertEqual(200, res.status_code)
+        self.assertEqual(
+            {
+                'rules': [{'uuid': 'foo',
+                           'links': [
+                               {'href': '/v1/rules/foo', 'rel': 'self'}
+                           ]},
+                          {'uuid': 'bar',
+                           'links': [
+                               {'href': '/v1/rules/bar', 'rel': 'self'}
+                           ]}]
+            },
+            json.loads(res.data.decode('utf-8')))
+        get_all_mock.assert_called_once_with()
+        for m in get_all_mock.return_value:
+            m.as_dict.assert_called_with(short=True)
+
+    @mock.patch.object(rules, 'delete_all')
+    def test_delete_all(self, delete_all_mock):
+        res = self.app.delete('/v1/rules')
+        self.assertEqual(204, res.status_code)
+        delete_all_mock.assert_called_once_with()
+
+    @mock.patch.object(rules, 'create', autospec=True)
+    def test_create(self, create_mock):
+        data = {'uuid': self.uuid,
+                'conditions': 'cond',
+                'actions': 'act'}
+        exp = data.copy()
+        exp['description'] = None
+        create_mock.return_value = mock.Mock(spec=rules.IntrospectionRule,
+                                             **{'as_dict.return_value': exp})
+
+        res = self.app.post('/v1/rules', data=json.dumps(data))
+        self.assertEqual(200, res.status_code)
+        create_mock.assert_called_once_with(conditions_json='cond',
+                                            actions_json='act',
+                                            uuid=self.uuid,
+                                            description=None)
+        self.assertEqual(exp, json.loads(res.data.decode('utf-8')))
+
+    @mock.patch.object(rules, 'create', autospec=True)
+    def test_create_bad_uuid(self, create_mock):
+        data = {'uuid': 'foo',
+                'conditions': 'cond',
+                'actions': 'act'}
+
+        res = self.app.post('/v1/rules', data=json.dumps(data))
+        self.assertEqual(400, res.status_code)
+
+    @mock.patch.object(rules, 'get')
+    def test_get_one(self, get_mock):
+        get_mock.return_value = mock.Mock(spec=rules.IntrospectionRule,
+                                          **{'as_dict.return_value':
+                                             {'uuid': 'foo'}})
+
+        res = self.app.get('/v1/rules/' + self.uuid)
+        self.assertEqual(200, res.status_code)
+        self.assertEqual({'uuid': 'foo',
+                          'links': [
+                              {'href': '/v1/rules/foo', 'rel': 'self'}
+                          ]},
+                         json.loads(res.data.decode('utf-8')))
+        get_mock.assert_called_once_with(self.uuid)
+        get_mock.return_value.as_dict.assert_called_once_with(short=False)
+
+    @mock.patch.object(rules, 'delete')
+    def test_delete_one(self, delete_mock):
+        res = self.app.delete('/v1/rules/' + self.uuid)
+        self.assertEqual(204, res.status_code)
+        delete_mock.assert_called_once_with(self.uuid)
 
 
 class TestApiMisc(BaseAPITest):
@@ -189,11 +305,53 @@ class TestApiVersions(BaseAPITest):
         self.assertEqual('%d.%d' % main.CURRENT_API_VERSION,
                          res.headers.get(main._MAX_VERSION_HEADER))
 
-    def test_root_endpoints(self):
-        for endpoint in '/', '/v1':
-            res = self.app.get(endpoint)
-            self.assertEqual(200, res.status_code)
-            self._check_version_present(res)
+    def test_root_endpoint(self):
+        res = self.app.get("/")
+        self.assertEqual(200, res.status_code)
+        self._check_version_present(res)
+        data = res.data.decode('utf-8')
+        json_data = json.loads(data)
+        expected = {"versions": [{
+            "status": "CURRENT", "id": '%s.%s' % main.CURRENT_API_VERSION,
+            "links": [{
+                "rel": "self",
+                "href": ("http://localhost/v%s" %
+                         main.CURRENT_API_VERSION[0])
+            }]
+        }]}
+        self.assertEqual(expected, json_data)
+
+    @mock.patch.object(main.app.url_map, "iter_rules", autospec=True)
+    def test_version_endpoint(self, mock_rules):
+        mock_rules.return_value = ["/v1/endpoint1", "/v1/endpoint2/<uuid>",
+                                   "/v1/endpoint1/<name>",
+                                   "/v2/endpoint1", "/v1/endpoint3",
+                                   "/v1/endpoint2/<uuid>/subpoint"]
+        endpoint = "/v1"
+        res = self.app.get(endpoint)
+        self.assertEqual(200, res.status_code)
+        self._check_version_present(res)
+        json_data = json.loads(res.data.decode('utf-8'))
+        expected = {u'resources': [
+            {
+                u'name': u'endpoint1',
+                u'links': [{
+                    u'rel': u'self',
+                    u'href': u'http://localhost/v1/endpoint1'}]
+            },
+            {
+                u'name': u'endpoint3',
+                u'links': [{
+                    u'rel': u'self',
+                    u'href': u'http://localhost/v1/endpoint3'}]
+            },
+        ]}
+        self.assertDictEqual(expected, json_data)
+
+    def test_version_endpoint_invalid(self):
+        endpoint = "/v-1"
+        res = self.app.get(endpoint)
+        self.assertEqual(404, res.status_code)
 
     def test_404_unexpected(self):
         # API version on unknown pages
@@ -240,8 +398,8 @@ class TestPlugins(unittest.TestCase):
         mgr = plugins_base.processing_hooks_manager()
         mgr.map_method('before_processing', 'introspection_data')
         mock_pre.assert_called_once_with(mock.ANY, 'introspection_data')
-        mgr.map_method('before_update', 'node_info', {}, [], {})
-        mock_post.assert_called_once_with(mock.ANY, 'node_info', {}, [], {})
+        mgr.map_method('before_update', 'node_info', {})
+        mock_post.assert_called_once_with(mock.ANY, 'node_info', {})
 
     def test_manager_is_cached(self):
         self.assertIs(plugins_base.processing_hooks_manager(),
@@ -276,6 +434,26 @@ class TestInit(test_base.BaseTest):
         CONF.set_override('auth_strategy', 'noauth')
         main.init()
         self.assertFalse(mock_auth.called)
+
+    @mock.patch.object(main.LOG, 'warning')
+    def test_init_with_no_data_storage(self, mock_log, mock_node_cache,
+                                       mock_get_client, mock_auth,
+                                       mock_firewall, mock_spawn_n):
+        msg = ('Introspection data will not be stored. Change '
+               '"[processing] store_data" option if this is not the '
+               'desired behavior')
+        main.init()
+        mock_log.assert_called_once_with(msg)
+
+    @mock.patch.object(main.LOG, 'info')
+    def test_init_with_swift_storage(self, mock_log, mock_node_cache,
+                                     mock_get_client, mock_auth,
+                                     mock_firewall, mock_spawn_n):
+        CONF.set_override('store_data', 'swift', 'processing')
+        msg = mock.call('Introspection data will be stored in Swift in the '
+                        'container %s', CONF.swift.container)
+        main.init()
+        self.assertIn(msg, mock_log.call_args_list)
 
     def test_init_without_manage_firewall(self, mock_node_cache,
                                           mock_get_client, mock_auth,

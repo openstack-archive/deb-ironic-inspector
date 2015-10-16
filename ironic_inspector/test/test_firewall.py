@@ -13,8 +13,9 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import mock
+import subprocess
 
+import mock
 from oslo_config import cfg
 
 from ironic_inspector import firewall
@@ -28,14 +29,18 @@ CONF = cfg.CONF
 
 @mock.patch.object(firewall, '_iptables')
 @mock.patch.object(utils, 'get_client')
+@mock.patch.object(subprocess, 'check_call')
 class TestFirewall(test_base.NodeTest):
-    def test_update_filters_without_manage_firewall(self, mock_get_client,
+    def test_update_filters_without_manage_firewall(self, mock_call,
+                                                    mock_get_client,
                                                     mock_iptables):
         CONF.set_override('manage_firewall', False, 'firewall')
         firewall.update_filters()
         self.assertEqual(0, mock_iptables.call_count)
 
-    def test_init_args(self, mock_get_client, mock_iptables):
+    def test_init_args(self, mock_call, mock_get_client, mock_iptables):
+        rootwrap_path = '/some/fake/path'
+        CONF.set_override('rootwrap_config', rootwrap_path)
         firewall.init()
         init_expected_args = [
             ('-D', 'INPUT', '-i', 'br-ctlplane', '-p', 'udp', '--dport', '67',
@@ -49,7 +54,33 @@ class TestFirewall(test_base.NodeTest):
         for (args, call) in zip(init_expected_args, call_args_list):
             self.assertEqual(args, call[0])
 
-    def test_init_kwargs(self, mock_get_client, mock_iptables):
+        expected = ('sudo', 'ironic-inspector-rootwrap', rootwrap_path,
+                    'iptables', '-w')
+        self.assertEqual(expected, firewall.BASE_COMMAND)
+
+    def test_init_args_old_iptables(self, mock_call, mock_get_client,
+                                    mock_iptables):
+        rootwrap_path = '/some/fake/path'
+        CONF.set_override('rootwrap_config', rootwrap_path)
+        mock_call.side_effect = subprocess.CalledProcessError(2, '')
+        firewall.init()
+        init_expected_args = [
+            ('-D', 'INPUT', '-i', 'br-ctlplane', '-p', 'udp', '--dport', '67',
+             '-j', CONF.firewall.firewall_chain),
+            ('-F', CONF.firewall.firewall_chain),
+            ('-X', CONF.firewall.firewall_chain),
+            ('-N', CONF.firewall.firewall_chain)]
+
+        call_args_list = mock_iptables.call_args_list
+
+        for (args, call) in zip(init_expected_args, call_args_list):
+            self.assertEqual(args, call[0])
+
+        expected = ('sudo', 'ironic-inspector-rootwrap', rootwrap_path,
+                    'iptables',)
+        self.assertEqual(expected, firewall.BASE_COMMAND)
+
+    def test_init_kwargs(self, mock_call, mock_get_client, mock_iptables):
         firewall.init()
         init_expected_kwargs = [
             {'ignore': True},
@@ -61,7 +92,8 @@ class TestFirewall(test_base.NodeTest):
         for (kwargs, call) in zip(init_expected_kwargs, call_args_list):
             self.assertEqual(kwargs, call[1])
 
-    def test_update_filters_args(self, mock_get_client, mock_iptables):
+    def test_update_filters_args(self, mock_call, mock_get_client,
+                                 mock_iptables):
         firewall.init()
 
         update_filters_expected_args = [
@@ -92,7 +124,8 @@ class TestFirewall(test_base.NodeTest):
                                 call_args_list):
             self.assertEqual(args, call[0])
 
-    def test_update_filters_kwargs(self, mock_get_client, mock_iptables):
+    def test_update_filters_kwargs(self, mock_call, mock_get_client,
+                                   mock_iptables):
         firewall.init()
 
         update_filters_expected_kwargs = [
@@ -118,7 +151,7 @@ class TestFirewall(test_base.NodeTest):
                                   call_args_list):
             self.assertEqual(kwargs, call[1])
 
-    def test_update_filters_with_blacklist(self, mock_get_client,
+    def test_update_filters_with_blacklist(self, mock_call, mock_get_client,
                                            mock_iptables):
         active_macs = ['11:22:33:44:55:66', '66:55:44:33:22:11']
         inactive_mac = ['AA:BB:CC:DD:EE:FF']

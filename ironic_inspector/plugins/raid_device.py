@@ -19,10 +19,10 @@ from ironic_inspector.common.i18n import _LI, _LW
 from ironic_inspector.plugins import base
 
 
-LOG = log.getLogger('ironic_inspector.plugins.root_device_hint')
+LOG = log.getLogger(__name__)
 
 
-class RootDeviceHintHook(base.ProcessingHook):
+class RaidDeviceDetection(base.ProcessingHook):
     """Processing hook for learning the root device after RAID creation.
 
     The plugin can figure out the root device in 2 runs. First, it saves the
@@ -44,6 +44,13 @@ class RootDeviceHintHook(base.ProcessingHook):
     the plugin needs to take precedence over the standard plugin.
     """
 
+    def _get_serials(self, data):
+        if 'inventory' in data:
+            return [x['serial'] for x in data['inventory'].get('disks', ())
+                    if x.get('serial')]
+        elif 'block_devices' in data:
+            return data['block_devices'].get('serials', ())
+
     def before_processing(self, introspection_data, **kwargs):
         """Adds fake local_gb value if it's missing from introspection_data."""
         if not introspection_data.get('local_gb'):
@@ -51,9 +58,9 @@ class RootDeviceHintHook(base.ProcessingHook):
                          'value for "local_gb"'))
             introspection_data['local_gb'] = 1
 
-    def before_update(self, introspection_data, node_info, node_patches,
-                      ports_patches, **kwargs):
-        if 'block_devices' not in introspection_data:
+    def before_update(self, introspection_data, node_info, **kwargs):
+        current_devices = self._get_serials(introspection_data)
+        if not current_devices:
             LOG.warning(_LW('No block device was received from ramdisk'))
             return
 
@@ -66,7 +73,6 @@ class RootDeviceHintHook(base.ProcessingHook):
         if 'block_devices' in node.extra:
             # Compare previously discovered devices with the current ones
             previous_devices = node.extra['block_devices']['serials']
-            current_devices = introspection_data['block_devices']['serials']
             new_devices = [device for device in current_devices
                            if device not in previous_devices]
 
@@ -78,7 +84,7 @@ class RootDeviceHintHook(base.ProcessingHook):
                 LOG.warning(_LW('No new devices were found'))
                 return
 
-            node_patches.extend([
+            node_info.patch([
                 {'op': 'remove',
                  'path': '/extra/block_devices'},
                 {'op': 'add',
@@ -89,6 +95,6 @@ class RootDeviceHintHook(base.ProcessingHook):
         else:
             # No previously discovered devices - save the inspector block
             # devices in node.extra
-            node_patches.append({'op': 'add',
-                                 'path': '/extra/block_devices',
-                                 'value': introspection_data['block_devices']})
+            node_info.patch([{'op': 'add',
+                              'path': '/extra/block_devices',
+                              'value': {'serials': current_devices}}])

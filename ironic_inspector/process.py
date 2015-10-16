@@ -15,14 +15,18 @@
 
 import eventlet
 from ironicclient import exceptions
+from oslo_config import cfg
 from oslo_log import log
 
-from ironic_inspector.common.i18n import _, _LE, _LI
+from ironic_inspector.common.i18n import _, _LE, _LI, _LW
+from ironic_inspector.common import swift
 from ironic_inspector import firewall
 from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
+from ironic_inspector import rules
 from ironic_inspector import utils
 
+CONF = cfg.CONF
 
 LOG = log.getLogger("ironic_inspector.process")
 
@@ -97,9 +101,8 @@ def process(introspection_data):
         }
         raise utils.Error(msg)
 
-    ironic = utils.get_client()
     try:
-        node = node_info.node(ironic)
+        node = node_info.node()
     except exceptions.NotFound:
         msg = (_('Node UUID %s was found in cache, but is not found in Ironic')
                % node_info.uuid)
@@ -107,7 +110,7 @@ def process(introspection_data):
         raise utils.Error(msg, code=404)
 
     try:
-        return _process_node(ironic, node, introspection_data, node_info)
+        return _process_node(node, introspection_data, node_info)
     except utils.Error as exc:
         node_info.finished(error=str(exc))
         raise
@@ -121,37 +124,49 @@ def process(introspection_data):
 def _run_post_hooks(node_info, introspection_data):
     hooks = plugins_base.processing_hooks_manager()
 
-    node_patches = []
-    port_patches = {}
     for hook_ext in hooks:
+        node_patches = []
+        ports_patches = {}
         hook_ext.obj.before_update(introspection_data, node_info,
-                                   node_patches, port_patches)
+                                   node_patches=node_patches,
+                                   ports_patches=ports_patches)
+        if node_patches:
+            LOG.warn(_LW('Using node_patches is deprecated'))
+            node_info.patch(node_patches)
 
-    node_patches = [p for p in node_patches if p]
-    port_patches = {mac: patch for (mac, patch) in port_patches.items()
-                    if patch and mac in node_info.ports()}
-    return node_patches, port_patches
+        if ports_patches:
+            LOG.warn(_LW('Using ports_patches is deprecated'))
+            for mac, patches in ports_patches.items():
+                node_info.patch_port(mac, patches)
 
 
-def _process_node(ironic, node, introspection_data, node_info):
+def _process_node(node, introspection_data, node_info):
     # NOTE(dtantsur): repeat the check in case something changed
     utils.check_provision_state(node)
 
-    node_info.create_ports(introspection_data.get('macs') or (), ironic=ironic)
+    node_info.create_ports(introspection_data.get('macs') or ())
 
-    node_patches, port_patches = _run_post_hooks(node_info,
-                                                 introspection_data)
+    _run_post_hooks(node_info, introspection_data)
 
-    node = ironic.node.update(node.uuid, node_patches)
-    for mac, patches in port_patches.items():
-        port = node_info.ports(ironic)[mac]
-        ironic.port.update(port.uuid, patches)
+    if CONF.processing.store_data == 'swift':
+        swift_object_name = swift.store_introspection_data(introspection_data,
+                                                           node_info.uuid)
+        LOG.info(_LI('Introspection data for node %(node)s was stored in '
+                     'Swift in object %(obj)s'),
+                 {'node': node_info.uuid, 'obj': swift_object_name})
+        if CONF.processing.store_data_location:
+            node_info.patch([{'op': 'add', 'path': '/extra/%s' %
+                              CONF.processing.store_data_location,
+                              'value': swift_object_name}])
+    else:
+        LOG.debug('Swift support is disabled, introspection data for node %s '
+                  'won\'t be stored', node_info.uuid)
 
-    LOG.debug('Node %s was updated with data from introspection process, '
-              'patches %s, port patches %s',
-              node.uuid, node_patches, port_patches)
-
+    ironic = utils.get_client()
     firewall.update_filters(ironic)
+
+    node_info.invalidate_cache()
+    rules.apply(node_info, introspection_data)
 
     resp = {'uuid': node.uuid}
 
@@ -180,7 +195,7 @@ def _finish_set_ipmi_credentials(ironic, node, node_info, introspection_data,
             introspection_data.get('ipmi_address')):
         patch.append({'op': 'add', 'path': '/driver_info/ipmi_address',
                       'value': introspection_data['ipmi_address']})
-    ironic.node.update(node_info.uuid, patch)
+    node_info.patch(patch)
 
     for attempt in range(_CREDENTIALS_WAIT_RETRIES):
         try:

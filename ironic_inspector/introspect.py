@@ -36,18 +36,12 @@ PASSWORD_MAX_LENGTH = 20  # IPMI v2.0
 
 _LAST_INTROSPECTION_TIME = 0
 _LAST_INTROSPECTION_LOCK = semaphore.BoundedSemaphore()
-_LAST_INTROSPECTION_RE = re.compile(CONF.introspection_delay_drivers)
 
 
 def _validate_ipmi_credentials(node, new_ipmi_credentials):
     if not CONF.processing.enable_setting_ipmi_credentials:
         raise utils.Error(
             _('IPMI credentials setup is disabled in configuration'))
-
-    if not node.maintenance:
-        # Otherwise Ironic is going to interfere
-        raise utils.Error(_('Node should be in maintenance mode to set '
-                            'IPMI credentials on it'))
 
     new_username, new_password = new_ipmi_credentials
     if not new_username:
@@ -89,7 +83,7 @@ def introspect(uuid, new_ipmi_credentials=None, token=None):
         raise utils.Error(_("Cannot get node %(node)s: %(exc)s") %
                           {'node': uuid, 'exc': exc})
 
-    utils.check_provision_state(node)
+    utils.check_provision_state(node, with_credentials=new_ipmi_credentials)
 
     if new_ipmi_credentials:
         new_ipmi_credentials = (
@@ -103,7 +97,8 @@ def introspect(uuid, new_ipmi_credentials=None, token=None):
                                      'reason': validation.power['reason']})
 
     node_info = node_cache.add_node(node.uuid,
-                                    bmc_address=utils.get_ipmi_address(node))
+                                    bmc_address=utils.get_ipmi_address(node),
+                                    ironic=ironic)
     node_info.set_option('new_ipmi_credentials', new_ipmi_credentials)
 
     def _handle_exceptions():
@@ -123,7 +118,7 @@ def _background_introspect(ironic, node_info):
     global _LAST_INTROSPECTION_TIME
 
     # TODO(dtantsur): pagination
-    macs = list(node_info.ports(ironic))
+    macs = list(node_info.ports())
     if macs:
         node_info.add_attribute(node_cache.MACS_ATTRIBUTE, macs)
         LOG.info(_LI('Whitelisting MAC\'s %(macs)s for node %(node)s on the'
@@ -131,9 +126,16 @@ def _background_introspect(ironic, node_info):
                  {'macs': macs, 'node': node_info.uuid})
         firewall.update_filters(ironic)
 
+    attrs = node_info.attributes
+    if CONF.processing.node_not_found_hook is None and not attrs:
+        raise utils.Error(
+            _('No lookup attributes were found for node %s, inspector won\'t '
+              'be able to find it after introspection. Consider creating '
+              'ironic ports or providing an IPMI address.') % node_info.uuid)
+
     LOG.info(_LI('The following attributes will be used for looking up '
                  'node %(uuid)s: %(attrs)s'),
-             {'attrs': node_info.attributes, 'uuid': node_info.uuid})
+             {'attrs': attrs, 'uuid': node_info.uuid})
 
     if not node_info.options.get('new_ipmi_credentials'):
         try:
@@ -144,7 +146,7 @@ def _background_introspect(ironic, node_info):
                             ' node %(node)s: %(exc)s') %
                         {'node': node_info.uuid, 'exc': exc})
 
-        if _LAST_INTROSPECTION_RE.match(node_info.node().driver):
+        if re.match(CONF.introspection_delay_drivers, node_info.node().driver):
             LOG.debug('Attempting to acquire lock on last introspection time')
             with _LAST_INTROSPECTION_LOCK:
                 delay = (_LAST_INTROSPECTION_TIME - time.time()

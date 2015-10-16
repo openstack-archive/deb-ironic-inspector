@@ -2,11 +2,12 @@ IRONIC_INSPECTOR_DEBUG=${IRONIC_INSPECTOR_DEBUG:-false}
 IRONIC_INSPECTOR_DIR=$DEST/ironic-inspector
 IRONIC_INSPECTOR_BIN_DIR=$(get_python_exec_prefix)
 IRONIC_INSPECTOR_BIN_FILE=$IRONIC_INSPECTOR_BIN_DIR/ironic-inspector
+IRONIC_INSPECTOR_DBSYNC_BIN_FILE=$IRONIC_INSPECTOR_BIN_DIR/ironic-inspector-dbsync
 IRONIC_INSPECTOR_CONF_DIR=${IRONIC_INSPECTOR_CONF_DIR:-/etc/ironic-inspector}
 IRONIC_INSPECTOR_CONF_FILE=$IRONIC_INSPECTOR_CONF_DIR/inspector.conf
-IRONIC_INSPECTOR_CMD="sudo $IRONIC_INSPECTOR_BIN_FILE --config-file $IRONIC_INSPECTOR_CONF_FILE"
+IRONIC_INSPECTOR_CMD="$IRONIC_INSPECTOR_BIN_FILE --config-file $IRONIC_INSPECTOR_CONF_FILE"
 IRONIC_INSPECTOR_DHCP_CONF_FILE=$IRONIC_INSPECTOR_CONF_DIR/dnsmasq.conf
-IRONIC_INSPECTOR_DATA_DIR=$DATA_DIR/ironic-inspector
+IRONIC_INSPECTOR_ROOTWRAP_CONF_FILE=$IRONIC_INSPECTOR_CONF_DIR/rootwrap.conf
 IRONIC_INSPECTOR_ADMIN_USER=${IRONIC_INSPECTOR_ADMIN_USER:-ironic-inspector}
 IRONIC_INSPECTOR_MANAGE_FIREWALL=$(trueorfalse True $IRONIC_INSPECTOR_MANAGE_FIREWALL)
 IRONIC_INSPECTOR_HOST=$HOST_IP
@@ -113,7 +114,6 @@ EOF
 
 function configure_inspector {
     mkdir_chown_stack "$IRONIC_INSPECTOR_CONF_DIR"
-    mkdir_chown_stack "$IRONIC_INSPECTOR_DATA_DIR"
 
     create_service_user "$IRONIC_INSPECTOR_ADMIN_USER" "admin"
 
@@ -135,10 +135,39 @@ function configure_inspector {
 
     inspector_iniset firewall manage_firewall $IRONIC_INSPECTOR_MANAGE_FIREWALL
     inspector_iniset firewall dnsmasq_interface $IRONIC_INSPECTOR_INTERFACE
-    inspector_iniset database connection sqlite:///$IRONIC_INSPECTOR_DATA_DIR/inspector.sqlite
+    inspector_iniset database connection `database_connection_url ironic_inspector`
+
+    is_service_enabled swift && configure_inspector_swift
 
     iniset "$IRONIC_CONF_FILE" inspector enabled True
     iniset "$IRONIC_CONF_FILE" inspector service_url $IRONIC_INSPECTOR_URI
+
+    if [ "$LOG_COLOR" == "True" ] && [ "$SYSLOG" == "False" ]; then
+        setup_colorized_logging $IRONIC_INSPECTOR_CONF_FILE DEFAULT
+    fi
+
+    cp "$IRONIC_INSPECTOR_DIR/rootwrap.conf" "$IRONIC_INSPECTOR_ROOTWRAP_CONF_FILE"
+    cp -r "$IRONIC_INSPECTOR_DIR/rootwrap.d" "$IRONIC_INSPECTOR_CONF_DIR"
+    local ironic_inspector_rootwrap=$(get_rootwrap_location ironic-inspector)
+    local rootwrap_sudoer_cmd="$ironic_inspector_rootwrap $IRONIC_INSPECTOR_CONF_DIR/rootwrap.conf *"
+
+    # Set up the rootwrap sudoers for ironic-inspector
+    local tempfile=`mktemp`
+    echo "$STACK_USER ALL=(root) NOPASSWD: $rootwrap_sudoer_cmd" >$tempfile
+    chmod 0640 $tempfile
+    sudo chown root:root $tempfile
+    sudo mv $tempfile /etc/sudoers.d/ironic-inspector-rootwrap
+
+    inspector_iniset DEFAULT rootwrap_config $IRONIC_INSPECTOR_ROOTWRAP_CONF_FILE
+}
+
+function configure_inspector_swift {
+    inspector_iniset swift os_auth_url "$KEYSTONE_SERVICE_URI/v2.0"
+    inspector_iniset swift username $IRONIC_INSPECTOR_ADMIN_USER
+    inspector_iniset swift password $SERVICE_PASSWORD
+    inspector_iniset swift tenant_name $SERVICE_TENANT_NAME
+
+    inspector_iniset processing store_data swift
 }
 
 function configure_inspector_dhcp {
@@ -170,9 +199,9 @@ function prepare_environment {
 }
 
 function cleanup_inspector {
-    rm -rf $IRONIC_INSPECTOR_DATA_DIR
     rm -f $IRONIC_TFTPBOOT_DIR/pxelinux.cfg/default
     rm -f $IRONIC_TFTPBOOT_DIR/ironic-inspector.*
+    sudo rm -f /etc/sudoers.d/ironic-inspector-rootwrap
 
     # Try to clean up firewall rules
     sudo iptables -D INPUT -i $IRONIC_INSPECTOR_INTERFACE -p udp \
@@ -187,6 +216,11 @@ function cleanup_inspector {
     sudo ip link show $IRONIC_INSPECTOR_INTERFACE && sudo ip link delete $IRONIC_INSPECTOR_INTERFACE
     sudo ip link show brbm-inspector && sudo ip link delete brbm-inspector
     sudo ovs-vsctl --if-exists del-port brbm-inspector
+}
+
+function sync_inspector_database {
+    recreate_database ironic_inspector
+    $IRONIC_INSPECTOR_DBSYNC_BIN_FILE --config-file $IRONIC_INSPECTOR_CONF_FILE upgrade
 }
 
 ### Entry points
@@ -205,6 +239,7 @@ elif [[ "$1" == "stack" && "$2" == "post-config" ]]; then
         configure_inspector_dhcp
     fi
     configure_inspector
+    sync_inspector_database
 elif [[ "$1" == "stack" && "$2" == "extra" ]]; then
     echo_summary "Initializing ironic-inspector"
     prepare_environment

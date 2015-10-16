@@ -68,6 +68,21 @@ class BaseTest(unittest.TestCase):
             # 'p=patch' magic is due to how closures work
             self.addCleanup(lambda p=patch: p.stop())
 
+    def assertPatchEqual(self, expected, actual):
+        expected = sorted(expected, key=lambda p: p['path'])
+        actual = sorted(actual, key=lambda p: p['path'])
+        self.assertEqual(expected, actual)
+
+    def assertCalledWithPatch(self, expected, mock_call):
+        def _get_patch_param(call):
+            try:
+                return call[0][1]
+            except IndexError:
+                return call[0][0]
+
+        actual = sum(map(_get_patch_param, mock_call.call_args_list), [])
+        self.assertPatchEqual(actual, expected)
+
 
 class NodeTest(BaseTest):
     def setUp(self):

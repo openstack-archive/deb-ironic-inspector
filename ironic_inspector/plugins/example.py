@@ -25,11 +25,18 @@ class ExampleProcessingHook(base.ProcessingHook):  # pragma: no cover
     def before_processing(self, introspection_data, **kwargs):
         LOG.debug('before_processing: %s', introspection_data)
 
-    def before_update(self, introspection_data, node_info, node_patches,
-                      ports_patches, **kwargs):
+    def before_update(self, introspection_data, node_info, **kwargs):
         LOG.debug('before_update: %s (node %s)', introspection_data,
                   node_info.uuid)
 
 
 def example_not_found_hook(introspection_data, **kwargs):
     LOG.debug('Processing node not found %s', introspection_data)
+
+
+class ExampleRuleAction(base.RuleActionPlugin):  # pragma: no cover
+    def apply(self, node_info, params, **kwargs):
+        LOG.debug('apply action to %s: %s', node_info.uuid, params)
+
+    def rollback(self, node_info, params, **kwargs):
+        LOG.debug('rollback action to %s: %s', node_info.uuid, params)

@@ -1,8 +1,8 @@
-Hardware introspection for OpenStack Ironic
-===========================================
+Hardware introspection for OpenStack Bare Metal
+===============================================
 
 This is an auxiliary service for discovering hardware properties for a
-node managed by `OpenStack Ironic`_. Hardware introspection or hardware
+node managed by `Ironic`_. Hardware introspection or hardware
 properties discovery is a process of getting hardware parameters required for
 scheduling from a bare metal node, given it's power management credentials
 (e.g. IPMI address, user name and password).
@@ -11,17 +11,17 @@ A special ramdisk is required to collect the information on a
 node. The default one can be built using diskimage-builder_ and
 `ironic-discoverd-ramdisk element`_ (see Configuration_ below).
 
-Support for **ironic-inspector** is present in `Tuskar UI`_ --
-OpenStack Horizon plugin for TripleO_.
+* Free software: Apache license
+* Source: http://git.openstack.org/cgit/openstack/ironic-inspector
+* Bugs: http://bugs.launchpad.net/ironic-inspector
+* Blueprints: https://blueprints.launchpad.net/ironic-inspector
+* Downloads: https://pypi.python.org/pypi/ironic-inspector
+* Python client library and CLI tool: `python-ironic-inspector-client
+  <https://pypi.python.org/pypi/python-ironic-inspector-client>`_.
 
-Please use launchpad_ to report bugs and ask questions. Use PyPI_ for
-downloads and accessing the released version of this README. Refer to
-CONTRIBUTING.rst_ for instructions on how to contribute.
+Refer to CONTRIBUTING.rst_ for instructions on how to contribute.
 
-.. _OpenStack Ironic: https://wiki.openstack.org/wiki/Ironic
-.. _Tuskar UI: https://pypi.python.org/pypi/tuskar-ui
-.. _TripleO: https://wiki.openstack.org/wiki/TripleO
-.. _launchpad: https://bugs.launchpad.net/ironic-inspector
+.. _Ironic: https://wiki.openstack.org/wiki/Ironic
 .. _PyPI: https://pypi.python.org/pypi/ironic-inspector
 .. _CONTRIBUTING.rst: https://github.com/openstack/ironic-inspector/blob/master/CONTRIBUTING.rst
 
@@ -62,18 +62,14 @@ Workflow
 
 Usual hardware introspection flow is as follows:
 
-* Operator installs undercloud with **ironic-inspector**
-  (e.g. using instack-undercloud_).
-
-* Operator enrolls nodes into Ironic either manually or by uploading CSV file
-  to `Tuskar UI`_. Power management credentials should be provided to Ironic
-  at this step.
+* Operator enrolls nodes into Ironic_ e.g. via ironic CLI command.
+  Power management credentials should be provided to Ironic at this step.
 
 * Nodes are put in the correct state for introspection as described in
   `Node States`_.
 
-* Operator sends nodes on introspection either manually using
-  **ironic-inspector** API (see Usage_) or again via `Tuskar UI`_.
+* Operator sends nodes on introspection using **ironic-inspector** API or CLI
+  (see Usage_).
 
 * On receiving node UUID **ironic-inspector**:
 
@@ -149,12 +145,12 @@ Fill in at least these configuration values:
 * ``os_auth_url``, ``identity_uri`` - Keystone endpoints for validating
   authentication tokens and checking user roles;
 
-* ``database`` - where you want **ironic-inspector** SQLite database
-  to be placed;
+* ``connection`` in the ``database`` section - SQLAlchemy connection string
+  for the database;
 
 * ``dnsmasq_interface`` - interface on which ``dnsmasq`` (or another DHCP
   service) listens for PXE boot requests (defaults to ``br-ctlplane`` which is
-  a sane default for TripleO_ based installations but is unlikely to work for
+  a sane default for TripleO-based installations but is unlikely to work for
   other cases).
 
 See comments inside `example.conf
@@ -165,18 +161,42 @@ for the other possible configuration options.
     Configuration file contains a password and thus should be owned by ``root``
     and should have access rights like ``0600``.
 
+**ironic-inspector** requires root rights for managing iptables. It gets them
+by running ``ironic-inspector-rootwrap`` utility with ``sudo``.
+To allow it, copy file ``rootwrap.conf`` and directory ``rootwrap.d`` to the
+configuration directory (e.g. ``/etc/ironic-inspector/``) and create file
+``/etc/sudoers.d/ironic-inspector-rootwrap`` with the following content::
+
+   stack ALL=(root) NOPASSWD: /usr/bin/ironic-inspector-rootwrap /etc/ironic-inspector/rootwrap.conf *
+
+.. DANGER::
+   Be very careful about typos in ``/etc/sudoers.d/ironic-inspector-rootwrap``
+   as any typo will break sudo for **ALL** users on the system. Especially,
+   make sure there is a new line at the end of this file.
+
+.. note::
+    ``rootwrap.conf`` and all files in ``rootwrap.d`` must be writeable
+    only by root.
+
+.. note::
+    If you store ``rootwrap.d`` in a different location, make sure to update
+    the *filters_path* option in ``rootwrap.conf`` to reflect the change.
+
+    If your ``rootwrap.conf`` is in a different location, then you need
+    to update the *rootwrap_config* option in ``ironic-inspector.conf``
+    to point to that location.
+
+Replace ``stack`` with whatever user you'll be using to run
+**ironic-inspector**.
+
+Configuring PXE
+^^^^^^^^^^^^^^^
+
 As for PXE boot environment, you'll need:
 
 * TFTP server running and accessible (see below for using *dnsmasq*).
   Ensure ``pxelinux.0`` is present in the TFTP root.
 
-* Build and put into your TFTP directory kernel and ramdisk from the
-  diskimage-builder_ `ironic-discoverd-ramdisk element`_::
-
-    ramdisk-image-create -o discovery fedora ironic-discoverd-ramdisk
-
-  You need diskimage-builder_ 0.1.38 or newer to do it (using the latest one
-  is always advised).
 
 * You need PXE boot server (e.g. *dnsmasq*) running on **the same** machine as
   **ironic-inspector**. Don't do any firewall configuration:
@@ -192,23 +212,9 @@ As for PXE boot environment, you'll need:
     tftp-root={TFTP ROOT, e.g. /tftpboot}
     dhcp-boot=pxelinux.0
 
-* Configure your ``$TFTPROOT/pxelinux.cfg/default`` with something like::
-
-    default discover
-
-    label discover
-    kernel discovery.kernel
-    append initrd=discovery.initramfs discoverd_callback_url=http://{IP}:5050/v1/continue
-
-    ipappend 3
-
-  Replace ``{IP}`` with IP of the machine (do not use loopback interface, it
-  will be accessed by ramdisk on a booting machine).
-
-  .. note::
-    There are some prebuilt images which use obsolete ``ironic_callback_url``
-    instead of ``discoverd_callback_url``. Modify ``pxelinux.cfg/default``
-    accordingly if you have one of these.
+* You have to install and configure one of 2 available ramdisks: simple
+  bash-based (see `Using simple ramdisk`_) or more complex based on
+  ironic-python-agent_ (See `Using IPA`_).
 
 Here is *inspector.conf* you may end up with::
 
@@ -226,20 +232,125 @@ Here is *inspector.conf* you may end up with::
 .. note::
     Set ``debug = true`` if you want to see complete logs.
 
+Using simple ramdisk
+^^^^^^^^^^^^^^^^^^^^
+
+* Build and put into your TFTP the kernel and ramdisk created using the
+  diskimage-builder_ `ironic-discoverd-ramdisk element`_::
+
+    ramdisk-image-create -o discovery fedora ironic-discoverd-ramdisk
+
+  You need diskimage-builder_ 0.1.38 or newer to do it (using the latest one
+  is always advised).
+
+* Configure your ``$TFTPROOT/pxelinux.cfg/default`` with something like::
+
+    default introspect
+
+    label introspect
+    kernel discovery.kernel
+    append initrd=discovery.initramfs discoverd_callback_url=http://{IP}:5050/v1/continue
+
+    ipappend 3
+
+  Replace ``{IP}`` with IP of the machine (do not use loopback interface, it
+  will be accessed by ramdisk on a booting machine).
+
+  .. note::
+    There are some prebuilt images which use obsolete ``ironic_callback_url``
+    instead of ``discoverd_callback_url``. Modify ``pxelinux.cfg/default``
+    accordingly if you have one of these.
+
+Using IPA
+^^^^^^^^^
+
+ironic-python-agent_ is a new ramdisk developed for Ironic. During the Liberty
+cycle support for **ironic-inspector** was added. This is experimental
+for now, but we plan on making IPA the default ramdisk in Mitaka cycle.
+
+.. note::
+    You need at least 1.5 GiB of RAM on the machines to use this ramdisk.
+
+To build an ironic-python-agent ramdisk, do the following:
+
+* Get the latest diskimage-builder_::
+
+    sudo pip install -U "diskimage-builder>=1.1.2"
+
+* Build the ramdisk::
+
+    disk-image-create ironic-agent fedora -o ironic-agent
+
+  .. note::
+    Replace "fedora" with your distribution of choice.
+
+* Copy resulting files ``ironic-agent.vmlinuz`` and ``ironic-agent.initramfs``
+  to the TFTP root directory.
+
+Next, set up ``$TFTPROOT/pxelinux.cfg/default`` as follows::
+
+    default introspect
+
+    label introspect
+    kernel ironic-agent.vmlinuz
+    append initrd=ironic-agent.initramfs ipa-inspection-callback-url=http://{IP}:5050/v1/continue systemd.journald.forward_to_console=yes
+
+    ipappend 3
+
+Replace ``{IP}`` with IP of the machine (do not use loopback interface, it
+will be accessed by ramdisk on a booting machine).
+
+.. note::
+    While ``systemd.journald.forward_to_console=yes`` is not actually
+    required, it will substantially simplify debugging if something goes wrong.
+
 .. _diskimage-builder: https://github.com/openstack/diskimage-builder
 .. _ironic-discoverd-ramdisk element: https://github.com/openstack/diskimage-builder/tree/master/elements/ironic-discoverd-ramdisk
+.. _ironic-python-agent: https://github.com/openstack/ironic-python-agent
+
+Managing the **ironic-inspector** database
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**ironic-inspector** provides a command line client for managing its database,
+this client can be used for upgrading, and downgrading the database using
+alembic migrations.
+
+If this is your first time running **ironic-inspector** to migrate the
+database simply run:
+::
+
+    ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf upgrade
+
+If you have previously run a version of **ironic-inspector** earlier than
+2.2.0, the safest thing is to delete the existing SQLite database and run
+``upgrade`` as shown above. If you, however, want to save the existing
+database, to ensure your database will work with the migrations, you'll need to
+run an extra step before upgrading the database. You only need to do this the
+first time running version 2.2.0 or later.
+
+If you are upgrading from **ironic-inspector** version 2.1.0 or lower:
+::
+
+    ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf stamp --revision 578f84f38d
+    ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf upgrade
+
+If you are upgrading from a git master install of **ironic-inspector** from
+after `Introspection Rules`_ were introduced:
+::
+
+    ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf stamp --revision d588418040d
+    ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf upgrade
+
+Other available commands can be discovered by running::
+
+    ironic-inspector-dbsync --help
 
 Running
 ~~~~~~~
 
-Run as ``root``::
+::
 
     ironic-inspector --config-file /etc/ironic-inspector/inspector.conf
-
-.. note::
-    Running as ``root`` is not required if **ironic-inspector** does not
-    manage the firewall (i.e. ``manage_firewall`` is set to ``false`` in the
-    configuration file).
 
 A good starting point for writing your own *systemd* unit should be `one used
 in Fedora <http://pkgs.fedoraproject.org/cgit/openstack-ironic-discoverd.git/plain/openstack-ironic-discoverd.service>`_
@@ -266,29 +377,84 @@ drivers, please refer to `Ironic inspection documentation`_ for details.
 Node States
 ~~~~~~~~~~~
 
-* As of Ironic Kilo release the nodes should be moved to ``MANAGEABLE``
-  provision state before introspection (requires *python-ironicclient*
-  of version 0.5.0 or newer)::
+* The nodes should be moved to ``MANAGEABLE`` provision state before
+  introspection (requires *python-ironicclient* of version 0.5.0 or newer)::
 
     ironic node-set-provision-state <UUID> manage
 
-  With Juno release and/or older *python-ironicclient* it's recommended
-  to set maintenance mode, so that nodes are not taken by Nova for deploying::
-
-    ironic node-update <UUID> replace maintenance=true
-
 * After successful introspection and before deploying nodes should be made
-  available to Nova, either by moving them to ``AVAILABLE`` state (Kilo)::
+  available to Nova, by moving them to ``AVAILABLE`` state::
 
     ironic node-set-provision-state <UUID> provide
 
-  or by removing maintenance mode (Juno and/or older client)::
-
-    ironic node-update <UUID> replace maintenance=false
-
   .. note::
     Due to how Nova interacts with Ironic driver, you should wait 1 minute
-    before Nova becomes aware of available nodes after issuing these commands.
+    before Nova becomes aware of available nodes after issuing this command.
+    Use ``nova hypervisor-stats`` command output to check it.
+
+Introspection Rules
+~~~~~~~~~~~~~~~~~~~
+
+Inspector supports a simple JSON-based DSL to define rules to run during
+introspection. Inspector provides an API to manage such rules, and will run
+them automatically after running all processing hooks.
+
+A rule consists of conditions to check, and actions to run. If conditions
+evaluate to true on the introspection data, then actions are run on a node.
+All actions have "rollback actions" associated with them, which are run when
+conditions evaluate to false. This way we can safely rerun introspection.
+
+Available conditions and actions are defined by plugins, and can be extended,
+see CONTRIBUTING.rst_ for details. See `HTTP API`_ for specific calls to define
+introspection rules.
+
+Conditions
+^^^^^^^^^^
+
+A condition is represented by an object with fields:
+
+``op`` the type of comparison operation, default available operators include :
+``eq``, ``le``, ``ge``, ``ne``, ``lt``, ``gt`` (basic comparison operators),
+``in-net`` (checks that IP address is in a given network).
+
+``field`` a `JSON path <http://goessner.net/articles/JsonPath/>`_ to the field
+in the introspection data to use in comparison.
+
+``multiple`` how to treat situations where the ``field`` query returns multiple
+results (e.g. the field contains a list), available options are:
+
+* ``any`` (the default) require any to match,
+* ``all`` require all to match,
+* ``first`` requrie the first to match.
+
+All other fields are passed to the condition plugin, e.g. numeric comparison
+operations require a ``value`` field to compare against.
+
+Actions
+^^^^^^^
+
+An action is represented by an object with fields:
+
+``action`` type of action. Possible values are defined by plugins.
+
+All other fields are passed to the action plugin.
+
+Default available actions include:
+
+* ``fail`` fail introspection. Requires a ``message`` parameter for the failure
+  message.
+
+* ``set-attribute`` sets an attribute on an Ironic node. Requires a ``path``
+  field, which is the path to the attribute as used by ironic (e.g.
+  ``/properties/something``), and a ``value`` to set.
+
+* ``set-capability`` sets a capability on an Ironic node. Requires ``name``
+  and ``value`` fields, which are the name and the value for a new capability
+  accordingly. Existing value for this same capability is replaced.
+
+* ``extend-attribute`` the same as ``set-attribute``, but treats existing
+  value as a list and appends value to it. If optional ``unique`` parameter is
+  set to ``True``, nothing will be added if given value is already in a list.
 
 Setting IPMI Credentials
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -300,13 +466,22 @@ is as follows:
 * Ensure nodes will PXE boot on the right network by default.
 
 * Set ``enable_setting_ipmi_credentials = true`` in the **ironic-inspector**
-  configuration file.
+  configuration file, restart **ironic-inspector**.
 
-* Enroll nodes in Ironic with setting their ``ipmi_address`` only. This step
-  allows **ironic-inspector** to distinguish nodes.
+* Enroll nodes in Ironic with setting their ``ipmi_address`` only (or
+  equivalent driver-specific property, as per ``ipmi_address_fields``
+  configuration option).
 
-* Set maintenance mode on nodes. That's an important step, otherwise Ironic
-  might interfere with introspection process.
+  With Ironic Liberty use ironic API version ``1.11``, so that new node gets
+  into ``enroll`` provision state::
+
+    ironic --ironic-api-version 1.11 node-create -d <DRIVER> -i ipmi_address=<ADDRESS>
+
+  Providing ``ipmi_address`` allows **ironic-inspector** to distinguish nodes.
+
+* With Ironic Kilo or older, set maintenance mode on nodes.
+  That's an important step, otherwise Ironic might interfere with introspection
+  process. This is replaced by ``enroll`` state in Ironic Liberty.
 
 * Start introspection with providing additional parameters:
 
@@ -317,7 +492,9 @@ is as follows:
 * Manually power on the nodes and wait.
 
 * After introspection is finished (watch nodes power state or use
-  **ironic-inspector** status API) you can turn maintenance mode off.
+  **ironic-inspector** status API) you can move node to ``manageable`` and
+  then ``available`` states - see `Node States`_. With Ironic Kilo you have to
+  move a node out of maintenance mode.
 
 Note that due to various limitations on password value in different BMC,
 **ironic-inspector** will only accept passwords with length between 1 and 20
@@ -347,12 +524,16 @@ Here are some plugins that can be additionally enabled:
 
 ``example``
     example plugin logging it's input and output.
-``root_device_hint``
+``raid_device`` (deprecated name ``root_device_hint``)
     gathers block devices from ramdisk and exposes root device in multiple
     runs.
 ``extra_hardware``
     stores the value of the 'data' key returned by the ramdisk as a JSON
-    encoded string in a Swift object.
+    encoded string in a Swift object. The plugin will also attempt to convert
+    the data into a format usable by introspection rules. If this is successful
+    then the new format will be stored in the 'extra' key. The 'data' key is
+    then deleted from the introspection data, as unless converted it's assumed
+    unusable by introspection rules.
 
 Refer to CONTRIBUTING.rst_ for information on how to write your own plugin.
 
@@ -362,8 +543,7 @@ Troubleshooting
 Errors when starting introspection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* *Refusing to introspect node <UUID> with provision state "available"
-  and maintenance mode off*
+* *Invalid provision state "available"*
 
   In Kilo release with *python-ironicclient* 0.5.0 or newer Ironic
   defaults to reporting provision state ``AVAILABLE`` for newly enrolled
@@ -461,3 +641,12 @@ Connect to the remote console as described in `Troubleshooting PXE boot`_ to
 see what is going on with the ramdisk. The ramdisk drops into emergency shell
 on failure, which you can use to look around. There should be file called
 ``logs`` with the current ramdisk logs.
+
+Troubleshooting DNS issues on Ubuntu
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Ubuntu uses local DNS caching, so tries localhost for DNS results first
+before calling out to an external DNS server. When DNSmasq is installed and
+configured for use with ironic-inspector, it can cause problems by interfering
+with the local DNS cache. To fix this issue ensure that ``/etc/resolve.conf``
+points to your external DNS servers and not to ``127.0.0.1``.

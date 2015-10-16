@@ -22,12 +22,13 @@ from oslo_config import cfg
 from oslo_log import log
 import six
 
-from ironic_inspector.common.i18n import _, _LE, _LI
+from ironic_inspector.common.i18n import _, _LE, _LW
 
 CONF = cfg.CONF
 
 # See http://specs.openstack.org/openstack/ironic-specs/specs/kilo/new-ironic-state-machine.html  # noqa
 VALID_STATES = {'enroll', 'manageable', 'inspecting', 'inspectfail'}
+SET_CREDENTIALS_VALID_STATES = {'enroll'}
 
 
 LOG = log.getLogger('ironic_inspector.utils')
@@ -155,8 +156,12 @@ def get_auth_strategy():
 
 
 def get_ipmi_address(node):
-    # All these are kind-of-ipmi
-    for name in ('ipmi_address', 'ilo_address', 'drac_host'):
+    ipmi_fields = ['ipmi_address'] + CONF.ipmi_address_fields
+    # NOTE(sambetts): IPMI Address is useless to us if bridging is enabled so
+    # just ignore it and return None
+    if node.driver_info.get("ipmi_bridging", "no") != "no":
+        return
+    for name in ipmi_fields:
         value = node.driver_info.get(name)
         if value:
             try:
@@ -167,16 +172,23 @@ def get_ipmi_address(node):
                 raise Error(msg % (value, node.uuid))
 
 
-def check_provision_state(node):
-    if not node.maintenance:
-        provision_state = node.provision_state
-        if provision_state and provision_state.lower() not in VALID_STATES:
-            msg = _('Refusing to introspect node %(node)s with provision state'
-                    ' "%(state)s" and maintenance mode off')
-            raise Error(msg % {'node': node.uuid, 'state': provision_state})
-    else:
-        LOG.info(_LI('Node %s is in maintenance mode, skipping'
-                     ' provision states check'), node.uuid)
+def check_provision_state(node, with_credentials=False):
+    if node.maintenance:
+        LOG.warn(_LW('Introspecting nodes in maintenance mode is deprecated, '
+                     'accepted states: %s'), VALID_STATES)
+        return
+
+    state = node.provision_state.lower()
+    if with_credentials and state not in SET_CREDENTIALS_VALID_STATES:
+        msg = _('Invalid provision state "%(state)s" for setting IPMI '
+                'credentials on node %(node)s, valid states are %(valid)s')
+        raise Error(msg % {'node': node.uuid, 'state': state,
+                           'valid': list(SET_CREDENTIALS_VALID_STATES)})
+    elif not with_credentials and state not in VALID_STATES:
+        msg = _('Invalid provision state "%(state)s" for introspection of '
+                'node %(node)s, valid states are "%(valid)s"')
+        raise Error(msg % {'node': node.uuid, 'state': state,
+                           'valid': list(VALID_STATES)})
 
 
 def capabilities_to_dict(caps):
@@ -189,4 +201,5 @@ def capabilities_to_dict(caps):
 def dict_to_capabilities(caps_dict):
     """Convert a dictionary into a string with the capabilities syntax."""
     return ','.join(["%s:%s" % (key, value)
-                     for key, value in caps_dict.items()])
+                     for key, value in caps_dict.items()
+                     if value is not None])

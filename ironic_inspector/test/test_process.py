@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import functools
+import json
 import time
 
 import eventlet
@@ -23,7 +24,6 @@ from ironic_inspector import firewall
 from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
 from ironic_inspector.plugins import example as example_plugin
-from ironic_inspector.plugins import standard as std_plugins
 from ironic_inspector import process
 from ironic_inspector.test import base as test_base
 from ironic_inspector import utils
@@ -35,7 +35,6 @@ class BaseTest(test_base.NodeTest):
     def setUp(self):
         super(BaseTest, self).setUp()
         self.started_at = time.time()
-        self.all_macs = self.macs + ['DE:AD:BE:EF:DE:AD']
         self.pxe_mac = self.macs[1]
         self.data = {
             'ipmi_address': self.bmc_address,
@@ -46,7 +45,7 @@ class BaseTest(test_base.NodeTest):
             'interfaces': {
                 'em1': {'mac': self.macs[0], 'ip': '1.2.0.1'},
                 'em2': {'mac': self.macs[1], 'ip': '1.2.0.2'},
-                'em3': {'mac': self.all_macs[2]},
+                'em3': {'mac': 'DE:AD:BE:EF:DE:AD'},
             },
             'boot_interface': '01-' + self.pxe_mac.replace(':', '-'),
         }
@@ -88,95 +87,12 @@ class TestProcess(BaseTest):
 
         # Only boot interface is added by default
         self.assertEqual(['em2'], sorted(self.data['interfaces']))
-        self.assertEqual(['em1', 'em2', 'em3'],
-                         sorted(self.data['all_interfaces']))
         self.assertEqual([self.pxe_mac], self.data['macs'])
 
         pop_mock.assert_called_once_with(bmc_address=self.bmc_address,
                                          mac=self.data['macs'])
         cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
-                                             self.data, pop_mock.return_value)
-
-    @prepare_mocks
-    def test_boot_interface_as_mac(self, cli, pop_mock, process_mock):
-        self.data['boot_interface'] = self.pxe_mac
-
-        res = process.process(self.data)
-
-        self.assertEqual(self.fake_result_json, res)
-
-        # Only boot interface is added by default
-        self.assertEqual(['em2'], sorted(self.data['interfaces']))
-        self.assertEqual(['em1', 'em2', 'em3'],
-                         sorted(self.data['all_interfaces']))
-        self.assertEqual([self.pxe_mac], self.data['macs'])
-
-        pop_mock.assert_called_once_with(bmc_address=self.bmc_address,
-                                         mac=self.data['macs'])
-        cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
-                                             self.data, pop_mock.return_value)
-
-    @prepare_mocks
-    def test_no_boot_interface(self, cli, pop_mock, process_mock):
-        del self.data['boot_interface']
-
-        res = process.process(self.data)
-
-        self.assertEqual(self.fake_result_json, res)
-
-        # By default interfaces w/o IP are dropped
-        self.assertEqual(['em1', 'em2'], sorted(self.data['interfaces']))
-        self.assertEqual(['em1', 'em2', 'em3'],
-                         sorted(self.data['all_interfaces']))
-        self.assertEqual(self.macs, sorted(self.data['macs']))
-
-        pop_mock.assert_called_once_with(bmc_address=self.bmc_address,
-                                         mac=self.data['macs'])
-        cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
-                                             self.data, pop_mock.return_value)
-
-    @prepare_mocks
-    def test_add_ports_active(self, cli, pop_mock, process_mock):
-        CONF.set_override('add_ports', 'active', 'processing')
-
-        res = process.process(self.data)
-
-        self.assertEqual(self.fake_result_json, res)
-
-        self.assertEqual(['em1', 'em2'],
-                         sorted(self.data['interfaces']))
-        self.assertEqual(['em1', 'em2', 'em3'],
-                         sorted(self.data['all_interfaces']))
-        self.assertEqual(self.macs, sorted(self.data['macs']))
-
-        pop_mock.assert_called_once_with(bmc_address=self.bmc_address,
-                                         mac=self.data['macs'])
-        cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
-                                             self.data, pop_mock.return_value)
-
-    @prepare_mocks
-    def test_add_ports_all(self, cli, pop_mock, process_mock):
-        CONF.set_override('add_ports', 'all', 'processing')
-
-        res = process.process(self.data)
-
-        self.assertEqual(self.fake_result_json, res)
-
-        # By default interfaces w/o IP are dropped
-        self.assertEqual(['em1', 'em2', 'em3'],
-                         sorted(self.data['interfaces']))
-        self.assertEqual(['em1', 'em2', 'em3'],
-                         sorted(self.data['all_interfaces']))
-        self.assertEqual(self.all_macs, sorted(self.data['macs']))
-
-        pop_mock.assert_called_once_with(bmc_address=self.bmc_address,
-                                         mac=self.data['macs'])
-        cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
+        process_mock.assert_called_once_with(cli.node.get.return_value,
                                              self.data, pop_mock.return_value)
 
     @prepare_mocks
@@ -187,52 +103,8 @@ class TestProcess(BaseTest):
         pop_mock.assert_called_once_with(bmc_address=None,
                                          mac=self.data['macs'])
         cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
+        process_mock.assert_called_once_with(cli.node.get.return_value,
                                              self.data, pop_mock.return_value)
-
-    @prepare_mocks
-    def test_no_interfaces(self, cli, pop_mock, process_mock):
-        del self.data['interfaces']
-        self.assertRaises(utils.Error, process.process, self.data)
-
-    @prepare_mocks
-    def test_invalid_interfaces_all(self, cli, pop_mock, process_mock):
-        self.data['interfaces'] = {
-            'br1': {'mac': 'broken', 'ip': '1.2.0.1'},
-            'br2': {'mac': '', 'ip': '1.2.0.2'},
-            'br3': {},
-        }
-
-        self.assertRaises(utils.Error, process.process, self.data)
-
-    @prepare_mocks
-    def test_invalid_interfaces(self, cli, pop_mock, process_mock):
-        self.data['interfaces'] = {
-            'br1': {'mac': 'broken', 'ip': '1.2.0.1'},
-            'br2': {'mac': '', 'ip': '1.2.0.2'},
-            'br3': {},
-            'em1': {'mac': self.macs[1], 'ip': '1.2.3.4'},
-        }
-
-        process.process(self.data)
-
-        self.assertEqual(['em1'], list(self.data['interfaces']))
-        self.assertEqual([self.macs[1]], self.data['macs'])
-
-        pop_mock.assert_called_once_with(bmc_address=self.bmc_address,
-                                         mac=[self.macs[1]])
-        cli.node.get.assert_called_once_with(self.uuid)
-        process_mock.assert_called_once_with(cli, cli.node.get.return_value,
-                                             self.data, pop_mock.return_value)
-
-    @prepare_mocks
-    def test_missing_required(self, cli, pop_mock, process_mock):
-        del self.data['cpus']
-
-        self.assertRaisesRegexp(utils.Error,
-                                'missing',
-                                process.process, self.data)
-        self.assertFalse(process_mock.called)
 
     @prepare_mocks
     def test_not_found_in_cache(self, cli, pop_mock, process_mock):
@@ -362,8 +234,7 @@ class TestProcessNode(BaseTest):
     def setUp(self):
         super(TestProcessNode, self).setUp()
         CONF.set_override('processing_hooks',
-                          'ramdisk_error,scheduler,validate_interfaces,'
-                          'example',
+                          '$processing.default_processing_hooks,example',
                           'processing')
         self.validate_attempts = 5
         self.data['macs'] = self.macs  # validate_interfaces hook
@@ -396,8 +267,7 @@ class TestProcessNode(BaseTest):
     @mock.patch.object(utils, 'get_client')
     def call(self, mock_cli):
         mock_cli.return_value = self.cli
-        return process._process_node(self.cli, self.node, self.data,
-                                     self.node_info)
+        return process._process_node(self.node, self.data, self.node_info)
 
     def test_return_includes_uuid(self, filters_mock, post_hook_mock):
         ret_val = self.call()
@@ -423,13 +293,13 @@ class TestProcessNode(BaseTest):
                                              address=self.macs[0])
         self.cli.port.create.assert_any_call(node_uuid=self.uuid,
                                              address=self.macs[1])
-        self.cli.node.update.assert_called_once_with(self.uuid,
-                                                     self.patch_props)
+        self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
         self.cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
         self.assertFalse(self.cli.node.validate.called)
 
         post_hook_mock.assert_called_once_with(self.data, self.node_info,
-                                               self.patch_props, {})
+                                               node_patches=mock.ANY,
+                                               ports_patches=mock.ANY)
         finished_mock.assert_called_once_with(mock.ANY)
 
     def test_overwrite_disabled(self, filters_mock, post_hook_mock):
@@ -441,7 +311,7 @@ class TestProcessNode(BaseTest):
 
         self.call()
 
-        self.cli.node.update.assert_called_once_with(self.uuid, patch)
+        self.assertCalledWithPatch(patch, self.cli.node.update)
 
     def test_port_failed(self, filters_mock, post_hook_mock):
         self.cli.port.create.side_effect = (
@@ -453,26 +323,25 @@ class TestProcessNode(BaseTest):
                                              address=self.macs[0])
         self.cli.port.create.assert_any_call(node_uuid=self.uuid,
                                              address=self.macs[1])
-        self.cli.node.update.assert_called_once_with(self.uuid,
-                                                     self.patch_props)
+        self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
 
     def test_hook_patches(self, filters_mock, post_hook_mock):
-        node_patches = ['node patch1', 'node patch2']
-        port_patch = ['port patch']
+        expected_node_patches = [{'path': 'foo', 'op': 'bar'}]
+        expected_port_patch = [{'path': 'foo', 'op': 'baz'}]
 
-        def fake_hook(data, node_info, node_p, ports_p):
-            node_p.extend(node_patches)
-            ports_p.setdefault(self.macs[1], []).extend(port_patch)
+        def fake_hook(data, node_info, node_patches, ports_patches):
+            node_patches.extend(expected_node_patches)
+            ports_patches.setdefault(self.macs[1],
+                                     []).extend(expected_port_patch)
 
         post_hook_mock.side_effect = fake_hook
 
         self.call()
 
-        self.cli.node.update.assert_called_once_with(self.uuid,
-                                                     self.patch_props
-                                                     + node_patches)
-        self.cli.port.update.assert_called_once_with(self.ports[1].uuid,
-                                                     port_patch)
+        self.assertCalledWithPatch(self.patch_props + expected_node_patches,
+                                   self.cli.node.update)
+        self.assertCalledWithPatch(expected_port_patch,
+                                   self.cli.port.update)
 
     def test_set_ipmi_credentials(self, filters_mock, post_hook_mock):
         self.node_info.set_option('new_ipmi_credentials', self.new_creds)
@@ -510,7 +379,6 @@ class TestProcessNode(BaseTest):
         self.assertRaisesRegexp(utils.Error, 'Failed to validate',
                                 self.call)
 
-        self.cli.node.update.assert_any_call(self.uuid, self.patch_props)
         self.cli.node.update.assert_any_call(self.uuid, self.patch_credentials)
         self.assertEqual(2, self.cli.node.update.call_count)
         self.assertEqual(process._CREDENTIALS_WAIT_RETRIES,
@@ -530,60 +398,40 @@ class TestProcessNode(BaseTest):
                                 self.call)
 
         self.cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
-        self.cli.node.update.assert_called_once_with(self.uuid,
-                                                     self.patch_props)
+        self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
         finished_mock.assert_called_once_with(
             mock.ANY,
             error='Failed to power off node %s, check it\'s power management'
             ' configuration: boom' % self.uuid)
 
-    @mock.patch.object(utils, 'get_client')
-    def test_keep_ports_present(self, client_mock, filters_mock,
-                                post_hook_mock):
-        CONF.set_override('keep_ports', 'present', 'processing')
-
-        # 2 MACs valid, one invalid, one not present in data
-        all_macs = self.all_macs + ['01:09:02:08:03:07']
-        all_ports = [
-            mock.Mock(uuid='port_uuid%d' % i, address=mac)
-            for i, mac in enumerate(all_macs)
-        ]
-
-        client_mock.return_value = self.cli
-        self.cli.node.list_ports.return_value = all_ports
+    @mock.patch.object(process.swift, 'SwiftAPI', autospec=True)
+    def test_store_data(self, swift_mock, filters_mock, post_hook_mock):
+        CONF.set_override('store_data', 'swift', 'processing')
+        swift_conn = swift_mock.return_value
+        name = 'inspector_data-%s' % self.uuid
+        expected = json.dumps(self.data)
 
         self.call()
 
-        self.cli.node.list_ports.assert_called_once_with(self.uuid, limit=0)
-        self.cli.port.delete.assert_called_once_with(all_ports[-1].uuid)
+        swift_conn.create_object.assert_called_once_with(name, expected)
+        self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
 
-    @mock.patch.object(utils, 'get_client')
-    def test_keep_ports_added(self, client_mock, filters_mock, post_hook_mock):
-        CONF.set_override('keep_ports', 'added', 'processing')
-
-        # 2 MACs valid, one invalid, one not present in data
-        all_macs = self.all_macs + ['01:09:02:08:03:07']
-        all_ports = [
-            mock.Mock(uuid='port_uuid%d' % i, address=mac)
-            for i, mac in enumerate(all_macs)
-        ]
-
-        client_mock.return_value = self.cli
-        self.cli.node.list_ports.return_value = all_ports
+    @mock.patch.object(process.swift, 'SwiftAPI', autospec=True)
+    def test_store_data_location(self, swift_mock, filters_mock,
+                                 post_hook_mock):
+        CONF.set_override('store_data', 'swift', 'processing')
+        CONF.set_override('store_data_location', 'inspector_data_object',
+                          'processing')
+        swift_conn = swift_mock.return_value
+        name = 'inspector_data-%s' % self.uuid
+        self.patch_props.append(
+            {'path': '/extra/inspector_data_object',
+             'value': name,
+             'op': 'add'}
+        )
+        expected = json.dumps(self.data)
 
         self.call()
 
-        self.cli.node.list_ports.assert_called_once_with(self.uuid, limit=0)
-        for port in all_ports[2:]:
-            self.cli.port.delete.assert_any_call(port.uuid)
-        self.assertEqual(2, self.cli.port.delete.call_count)
-
-
-class TestValidateInterfacesHook(test_base.BaseTest):
-    def test_wrong_add_ports(self):
-        CONF.set_override('add_ports', 'foobar', 'processing')
-        self.assertRaises(SystemExit, std_plugins.ValidateInterfacesHook)
-
-    def test_wrong_keep_ports(self):
-        CONF.set_override('keep_ports', 'foobar', 'processing')
-        self.assertRaises(SystemExit, std_plugins.ValidateInterfacesHook)
+        swift_conn.create_object.assert_called_once_with(name, expected)
+        self.assertCalledWithPatch(self.patch_props, self.cli.node.update)

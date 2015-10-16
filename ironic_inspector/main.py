@@ -15,7 +15,8 @@ import eventlet
 eventlet.monkey_patch()
 
 import functools
-import json
+import os
+import re
 import ssl
 import sys
 
@@ -23,15 +24,18 @@ import flask
 from oslo_config import cfg
 from oslo_log import log
 from oslo_utils import uuidutils
+import werkzeug
 
 from ironic_inspector import db
 from ironic_inspector.common.i18n import _, _LC, _LE, _LI, _LW
+from ironic_inspector.common import swift
 from ironic_inspector import conf  # noqa
 from ironic_inspector import firewall
 from ironic_inspector import introspect
 from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
 from ironic_inspector import process
+from ironic_inspector import rules
 from ironic_inspector import utils
 
 CONF = cfg.CONF
@@ -41,7 +45,7 @@ app = flask.Flask(__name__)
 LOG = log.getLogger('ironic_inspector.main')
 
 MINIMUM_API_VERSION = (1, 0)
-CURRENT_API_VERSION = (1, 0)
+CURRENT_API_VERSION = (1, 2)
 _MIN_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Minimum-Version'
 _MAX_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Maximum-Version'
 _VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Version'
@@ -68,7 +72,10 @@ def convert_exceptions(func):
             return func(*args, **kwargs)
         except utils.Error as exc:
             return error_response(exc, exc.http_code)
+        except werkzeug.exceptions.HTTPException as exc:
+            return error_response(exc, exc.code or 400)
         except Exception as exc:
+            LOG.exception(_LE('Internal server error'))
             msg = _('Internal server error')
             if CONF.debug:
                 msg += ' (%s): %s' % (exc.__class__.__name__, exc)
@@ -103,13 +110,55 @@ def add_version_headers(res):
     return res
 
 
+def create_link_object(urls):
+    links = []
+    for url in urls:
+        links.append({"rel": "self",
+                      "href": os.path.join(flask.request.url_root, url)})
+    return links
+
+
+def generate_resource_data(resources):
+    data = []
+    for resource in resources:
+        item = {}
+        item['name'] = str(resource).split('/')[-1]
+        item['links'] = create_link_object([str(resource)[1:]])
+        data.append(item)
+    return data
+
+
 @app.route('/', methods=['GET'])
-@app.route('/v1', methods=['GET'])
 @convert_exceptions
 def api_root():
-    # TODO(dtantsur): this endpoint only returns API version now, it's possible
-    # we'll return something meaningful in addition later
-    return '{}', 200, {'Content-Type': 'application/json'}
+    versions = [
+        {
+            "status": "CURRENT",
+            "id": '%s.%s' % CURRENT_API_VERSION,
+        },
+    ]
+
+    for version in versions:
+        version['links'] = create_link_object(
+            ["v%s" % version['id'].split('.')[0]])
+
+    return flask.jsonify(versions=versions)
+
+
+@app.route('/<version>', methods=['GET'])
+@convert_exceptions
+def version_root(version):
+    pat = re.compile("^\/%s\/[^\/]*?$" % version)
+
+    resources = []
+    for url in app.url_map.iter_rules():
+        if pat.match(str(url)):
+            resources.append(url)
+
+    if not resources:
+        raise utils.Error(_('Version not found.'), code=404)
+
+    return flask.jsonify(resources=generate_resource_data(resources))
 
 
 @app.route('/v1/continue', methods=['POST'])
@@ -118,10 +167,10 @@ def api_continue():
     data = flask.request.get_json(force=True)
     LOG.debug("/v1/continue got JSON %s", data)
 
-    res = process.process(data)
-    return json.dumps(res), 200, {'Content-Type': 'applications/json'}
+    return flask.jsonify(process.process(data))
 
 
+# TODO(sambetts) Add API discovery for this endpoint
 @app.route('/v1/introspection/<uuid>', methods=['GET', 'POST'])
 @convert_exceptions
 def api_introspection(uuid):
@@ -150,6 +199,65 @@ def api_introspection(uuid):
         node_info = node_cache.get_node(uuid)
         return flask.json.jsonify(finished=bool(node_info.finished_at),
                                   error=node_info.error or None)
+
+
+@app.route('/v1/introspection/<uuid>/data', methods=['GET'])
+@convert_exceptions
+def api_introspection_data(uuid):
+    utils.check_auth(flask.request)
+    if CONF.processing.store_data == 'swift':
+        res = swift.get_introspection_data(uuid)
+        return res, 200, {'Content-Type': 'application/json'}
+    else:
+        return error_response(_('Inspector is not configured to store data. '
+                                'Set the [processing] store_data '
+                                'configuration option to change this.'),
+                              code=404)
+
+
+def rule_repr(rule, short):
+    result = rule.as_dict(short=short)
+    result['links'] = [{
+        'href': flask.url_for('api_rule', uuid=result['uuid']),
+        'rel': 'self'
+    }]
+    return result
+
+
+@app.route('/v1/rules', methods=['GET', 'POST', 'DELETE'])
+@convert_exceptions
+def api_rules():
+    utils.check_auth(flask.request)
+
+    if flask.request.method == 'GET':
+        res = [rule_repr(rule, short=True) for rule in rules.get_all()]
+        return flask.jsonify(rules=res)
+    elif flask.request.method == 'DELETE':
+        rules.delete_all()
+        return '', 204
+    else:
+        body = flask.request.get_json(force=True)
+        if body.get('uuid') and not uuidutils.is_uuid_like(body['uuid']):
+            raise utils.Error(_('Invalid UUID value'), code=400)
+
+        rule = rules.create(conditions_json=body.get('conditions', []),
+                            actions_json=body.get('actions', []),
+                            uuid=body.get('uuid'),
+                            description=body.get('description'))
+        return flask.jsonify(rule_repr(rule, short=False))
+
+
+@app.route('/v1/rules/<uuid>', methods=['GET', 'DELETE'])
+@convert_exceptions
+def api_rule(uuid):
+    utils.check_auth(flask.request)
+
+    if flask.request.method == 'GET':
+        rule = rules.get(uuid)
+        return flask.jsonify(rule_repr(rule, short=False))
+    else:
+        rules.delete(uuid)
+        return '', 204
 
 
 @app.errorhandler(404)
@@ -193,6 +301,14 @@ def init():
     else:
         LOG.warning(_LW('Starting unauthenticated, please check'
                         ' configuration'))
+
+    if CONF.processing.store_data == 'none':
+        LOG.warning(_LW('Introspection data will not be stored. Change '
+                        '"[processing] store_data" option if this is not the '
+                        'desired behavior'))
+    elif CONF.processing.store_data == 'swift':
+        LOG.info(_LI('Introspection data will be stored in Swift in the '
+                     'container %s'), CONF.swift.container)
 
     db.init()
 

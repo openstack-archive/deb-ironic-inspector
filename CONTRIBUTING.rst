@@ -83,6 +83,7 @@ Example local.conf
     enable_service ironic ir-api ir-cond
     disable_service n-net n-novnc
     enable_service neutron q-svc q-agt q-dhcp q-l3 q-meta
+    enable_service s-proxy s-object s-container s-account
     disable_service heat h-api h-api-cfn h-api-cw h-eng
     disable_service cinder c-sch c-api c-vol
 
@@ -153,11 +154,14 @@ Writing a Plugin
       called before any data processing, providing the raw data. Each plugin in
       the chain can modify the data, so order in which plugins are loaded
       matters here. Returns nothing.
-  ``before_update(introspection_data,node_info,node_patches,ports_patches,**)``
+  ``before_update(introspection_data,node_info,**)``
       called after node is found and ports are created, but before data is
-      updated on a node. ``node_patches`` and ``ports_patches`` are JSON
-      patches for node and ports to apply.
-      Please refer to the docstring for details and examples.
+      updated on a node.  Please refer to the docstring for details
+      and examples.
+
+      .. note::
+        Keyword arguments node_patches and port_patches are also provided, but
+        should not be used in new plugins.
 
   Make your plugin a setuptools entry point under
   ``ironic_inspector.hooks.processing`` namespace and enable it in the
@@ -174,8 +178,88 @@ Writing a Plugin
   ``ironic_inspector.hooks.node_not_found`` namespace and enable it in the
   configuration file (``processing.node_not_found_hook`` option).
 
+* **ironic-inspector**  allows more condition types to be added for
+  `Introspection Rules`_. Inherit ``RuleConditionPlugin`` class defined in
+  ironic_inspector.plugins.base_ module and overwrite at least the following
+  method:
+
+  ``check(node_info,field,params,**)``
+      called to check that condition holds for a given field. Field value is
+      provided as ``field`` argument, ``params`` is a dictionary defined
+      at the time of condition creation. Returns boolean value.
+
+  The following methods and attributes may also be overridden:
+
+  ``validate(params,**)``
+      called to validate parameters provided during condition creating.
+      Default implementation requires keys listed in ``REQUIRED_PARAMS`` (and
+      only them).
+
+  ``REQUIRED_PARAMS``
+      contains set of required parameters used in the default implementation
+      of ``validate`` method, defaults to ``value`` parameter.
+
+  ``ALLOW_NONE``
+      if it's set to ``True``, missing fields will be passed as ``None``
+      values instead of failing the condition. Defaults to ``False``.
+
+  Make your plugin a setuptools entry point under
+  ``ironic_inspector.rules.conditions`` namespace.
+
+* **ironic-inspector** allows more action types to be added for `Introspection
+  Rules`_. Inherit ``RuleActionPlugin`` class defined in
+  ironic_inspector.plugins.base_ module and overwrite at least the following
+  method:
+
+  ``apply(node_info,params,**)``
+      called to apply the action.
+
+  The following methods and attributes may also be overridden:
+
+  ``rollback(node_info,params,**)``
+      called to clean up when conditions were not met.
+      Default implementation does nothing.
+
+  ``validate(params,**)``
+      called to validate parameters provided during actions creating.
+      Default implementation requires keys listed in ``REQUIRED_PARAMS`` (and
+      only them).
+
+  ``REQUIRED_PARAMS``
+      contains set of required parameters used in the default implementation
+      of ``validate`` method, defaults to no parameters.
+
+  Make your plugin a setuptools entry point under
+  ``ironic_inspector.rules.conditions`` namespace.
+
 .. note::
     ``**`` argument is needed so that we can add optional arguments without
     breaking out-of-tree plugins. Please make sure to include and ignore it.
 
 .. _ironic_inspector.plugins.base: https://github.com/openstack/ironic-inspector/blob/master/ironic_inspector/plugins/base.py
+.. _Introspection Rules: https://github.com/openstack/ironic-inspector#introspection-rules
+
+Adding migrations to the database
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In order to make any changes to the database, you must add a new migration.
+This can be done using alembic::
+
+    alembic --config ironic_inspector/alembic.ini revision -m "A short description"
+
+This will generate an empty migration file, with the correct revision
+information already included. In this file there are two functions:
+
+* upgrade - The upgrade function is run when
+    ``ironic-inspector-dbsync upgrade`` is run, and should be populated with
+    code to bring the database up to its new state from the state it was in
+    after the last migration.
+
+* downgrade - The downgrade function should have code to undo the actions which
+    upgrade performs, returning the database to the state it would have been in
+    before the migration ran.
+
+For further information on creating a migration, refer to
+`Create a Migration Script`_ from the alembic documentation.
+
+.. _Create a Migration Script: https://alembic.readthedocs.org/en/latest/tutorial.html#create-a-migration-script

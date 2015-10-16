@@ -20,6 +20,7 @@ import sys
 
 from oslo_config import cfg
 from oslo_log import log
+from oslo_utils import units
 
 from ironic_inspector.common.i18n import _, _LC, _LI, _LW
 from ironic_inspector import conf
@@ -30,6 +31,63 @@ CONF = cfg.CONF
 
 
 LOG = log.getLogger('ironic_inspector.plugins.standard')
+KNOWN_ROOT_DEVICE_HINTS = ('model', 'vendor', 'serial', 'wwn', 'hctl',
+                           'size')
+
+
+class RootDiskSelectionHook(base.ProcessingHook):
+    """Smarter root disk selection using Ironic root device hints.
+
+    This hook must always go before SchedulerHook, otherwise root_disk field
+    might not be updated.
+    """
+
+    def before_update(self, introspection_data, node_info, node_patches,
+                      ports_patches, **kwargs):
+        """Detect root disk from root device hints and IPA inventory."""
+        hints = node_info.node().properties.get('root_device')
+        if not hints:
+            LOG.debug('Root device hints are not provided for node %s',
+                      node_info.uuid)
+            return
+
+        inventory = introspection_data.get('inventory')
+        if not inventory:
+            LOG.error(_LW('Root device selection require ironic-python-agent '
+                          'as an inspection ramdisk'))
+            # TODO(dtantsur): make it a real error in Mitaka cycle
+            return
+
+        disks = inventory.get('disks', [])
+        if not disks:
+            raise utils.Error(_('No disks found on a node %s') %
+                              node_info.uuid)
+
+        for disk in disks:
+            properties = disk.copy()
+            # Root device hints are in GiB, data from IPA is in bytes
+            properties['size'] //= units.Gi
+
+            for name, value in hints.items():
+                actual = properties.get(name)
+                if actual != value:
+                    LOG.debug('Disk %(disk)s does not satisfy hint '
+                              '%(name)s=%(value)s for node %(node)s, '
+                              'actual value is %(actual)s',
+                              {'disk': disk.get('name'),
+                               'name': name, 'value': value,
+                               'node': node_info.uuid, 'actual': actual})
+                    break
+            else:
+                LOG.debug('Disk %(disk)s of size %(size)s satisfies '
+                          'root device hints for node %(node)s',
+                          {'disk': disk.get('name'), 'node': node_info.uuid,
+                           'size': disk['size']})
+                introspection_data['root_disk'] = disk
+                return
+
+        raise utils.Error(_('No disks satisfied root device hints for node %s')
+                          % node_info.uuid)
 
 
 class SchedulerHook(base.ProcessingHook):
@@ -37,8 +95,14 @@ class SchedulerHook(base.ProcessingHook):
 
     KEYS = ('cpus', 'cpu_arch', 'memory_mb', 'local_gb')
 
-    def before_processing(self, introspection_data, **kwargs):
-        """Validate that required properties are provided by the ramdisk."""
+    def before_update(self, introspection_data, node_info, **kwargs):
+        """Update node with scheduler properties."""
+        root_disk = introspection_data.get('root_disk')
+        if root_disk:
+            introspection_data['local_gb'] = root_disk['size'] // units.Gi
+            if CONF.processing.disk_partitioning_spacing:
+                introspection_data['local_gb'] -= 1
+
         missing = [key for key in self.KEYS if not introspection_data.get(key)]
         if missing:
             raise utils.Error(
@@ -49,15 +113,11 @@ class SchedulerHook(base.ProcessingHook):
                      'memory %(memory_mb)s MiB, disk %(local_gb)s GiB'),
                  {key: introspection_data.get(key) for key in self.KEYS})
 
-    def before_update(self, introspection_data, node_info, node_patches,
-                      ports_patches, **kwargs):
-        """Update node with scheduler properties."""
         overwrite = CONF.processing.overwrite_existing
-        patches = [{'op': 'add', 'path': '/properties/%s' % key,
-                    'value': str(introspection_data[key])}
-                   for key in self.KEYS
-                   if overwrite or not node_info.node().properties.get(key)]
-        node_patches.extend(patches)
+        properties = {key: str(introspection_data[key])
+                      for key in self.KEYS if overwrite or
+                      not node_info.node().properties.get(key)}
+        node_info.update_properties(**properties)
 
 
 class ValidateInterfacesHook(base.ProcessingHook):
@@ -129,8 +189,7 @@ class ValidateInterfacesHook(base.ProcessingHook):
         valid_macs = [iface['mac'] for iface in valid_interfaces.values()]
         introspection_data['macs'] = valid_macs
 
-    def before_update(self, introspection_data, node_info, node_patches,
-                      ports_patches, **kwargs):
+    def before_update(self, introspection_data, node_info, **kwargs):
         """Drop ports that are not present in the data."""
         if CONF.processing.keep_ports == 'present':
             expected_macs = {
@@ -142,8 +201,8 @@ class ValidateInterfacesHook(base.ProcessingHook):
         else:
             return
 
-        ironic = utils.get_client()
-        for port in node_info.ports(ironic).values():
+        # list is required as we modify underlying dict
+        for port in list(node_info.ports().values()):
             if port.address not in expected_macs:
                 LOG.info(_LI("Deleting port %(port)s as its MAC %(mac)s is "
                              "not in expected MAC list %(expected)s for node "
@@ -152,7 +211,7 @@ class ValidateInterfacesHook(base.ProcessingHook):
                           'mac': port.address,
                           'expected': list(sorted(expected_macs)),
                           'node': node_info.uuid})
-                ironic.port.delete(port.uuid)
+                node_info.delete_port(port)
 
 
 class RamdiskErrorHook(base.ProcessingHook):
