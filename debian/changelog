@@ -3,6 +3,7 @@ ironic-inspector (2.2.1-1) unstable; urgency=medium
   * New upstream release.
   * Uploading to unstable.
   * Fixed (build-)depends for this release.
+  * Also package a sudoers file, as ironic-inspector now uses rootwrap.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 16 Oct 2015 20:28:42 +0000
 
