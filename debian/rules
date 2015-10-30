@@ -30,6 +30,7 @@ override_dh_auto_install:
 	done
 	cp -auxf ironic_inspector/alembic.ini ironic_inspector/migrations $(CURDIR)/debian/python-ironic-inspector/usr/lib/python2.7/dist-packages/ironic_inspector/
 	install -D -m 0640 example.conf $(CURDIR)/debian/ironic-inspector/usr/share/ironic-inspector/inspector.conf
+	sed -i 's|^[ \t#]*connection[ \t]=.*|connection = sqlite:////var/lib/ironic-inspector/inspectordb|' $(CURDIR)/debian/ironic-inspector/usr/share/ironic-inspector/inspector.conf
 	install -D -m 0644 rootwrap.conf $(CURDIR)/debian/ironic-inspector/etc/ironic-inspector/rootwrap.conf
 	install -D -m 0644 rootwrap.d/ironic-inspector-firewall.filters $(CURDIR)/debian/ironic-inspector/etc/ironic-inspector/rootwrap.d/ironic-inspector-firewall.filters
 	install -D -m 0644 $(CURDIR)/debian/ironic-inspector.sudoers $(CURDIR)/debian/ironic-inspector/etc/sudoers.d/ironic-inspector
