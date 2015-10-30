@@ -8,7 +8,7 @@ if [ "${1}" = "configure" ] || [ "${1}" = "reconfigure" ] ; then
 	pkgos_var_user_group ironic-inspector
 
 	pkgos_write_new_conf ironic-inspector inspector.conf
-	su -c 'ironic-inspector-dbsync --config-file=/etc/ironic-inspector/inspector.conf upgrade' ironic-inspector
+	su -s /bin/sh -c 'ironic-inspector-dbsync --config-file=/etc/ironic-inspector/inspector.conf upgrade' ironic-inspector
 fi
 
 #DEBHELPER#
