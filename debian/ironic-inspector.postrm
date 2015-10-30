@@ -5,6 +5,7 @@ set -e
 if [ "${1}" = "purge" ] ; then
 	rm -f /etc/ironic-inspector/inspector.conf
 	rmdir --ignore-fail-on-non-empty /etc/ironic-inspector || true
+	rm -rf /var/lib/ironic-inspector
 fi
 
 #DEBHELPER#
