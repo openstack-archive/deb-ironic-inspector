@@ -1,0 +1,36 @@
+Description: fix path to ironic-inspector-rootwrap
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2015-10-30
+
+--- ironic-inspector-2.2.1.orig/ironic_inspector/firewall.py
++++ ironic-inspector-2.2.1/ironic_inspector/firewall.py
+@@ -61,7 +61,7 @@ def init():
+     INTERFACE = CONF.firewall.dnsmasq_interface
+     CHAIN = CONF.firewall.firewall_chain
+     NEW_CHAIN = CHAIN + '_temp'
+-    BASE_COMMAND = ('sudo', 'ironic-inspector-rootwrap',
++    BASE_COMMAND = ('sudo', '/usr/bin/ironic-inspector-rootwrap',
+                     CONF.rootwrap_config, 'iptables',)
+ 
+     # -w flag makes iptables wait for xtables lock, but it's not supported
+--- ironic-inspector-2.2.1.orig/ironic_inspector/test/test_firewall.py
++++ ironic-inspector-2.2.1/ironic_inspector/test/test_firewall.py
+@@ -54,7 +54,7 @@ class TestFirewall(test_base.NodeTest):
+         for (args, call) in zip(init_expected_args, call_args_list):
+             self.assertEqual(args, call[0])
+ 
+-        expected = ('sudo', 'ironic-inspector-rootwrap', rootwrap_path,
++        expected = ('sudo', '/usr/bin/ironic-inspector-rootwrap', rootwrap_path,
+                     'iptables', '-w')
+         self.assertEqual(expected, firewall.BASE_COMMAND)
+ 
+@@ -76,7 +76,7 @@ class TestFirewall(test_base.NodeTest):
+         for (args, call) in zip(init_expected_args, call_args_list):
+             self.assertEqual(args, call[0])
+ 
+-        expected = ('sudo', 'ironic-inspector-rootwrap', rootwrap_path,
++        expected = ('sudo', '/usr/bin/ironic-inspector-rootwrap', rootwrap_path,
+                     'iptables',)
+         self.assertEqual(expected, firewall.BASE_COMMAND)
+ 
