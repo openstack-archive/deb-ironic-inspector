@@ -1,3 +1,9 @@
+ironic-inspector (2.2.1-2) unstable; urgency=medium
+
+  * Also rm /var/log/ironic-inspector on purge.
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 31 Oct 2015 11:34:16 +0100
+
 ironic-inspector (2.2.1-1) unstable; urgency=medium
 
   * New upstream release.
