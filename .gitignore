@@ -6,7 +6,10 @@
 
 # Sphinx
 _build
-doc/source/api/
+#doc/source/api/
+
+# release notes build
+releasenotes/build
 
 # Packages/installer info
 *.egg
@@ -19,6 +22,7 @@ var
 sdist
 develop-eggs
 .installed.cfg
+.eggs/
 
 # Other
 *.DS_Store
