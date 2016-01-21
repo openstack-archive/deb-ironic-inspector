@@ -9,6 +9,12 @@ ironic-inspector (3.0.0-1) experimental; urgency=medium
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 09 Mar 2016 13:47:12 +0100
 
+ironic-inspector (2.3.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 21 Jan 2016 10:36:30 +0000
+
 ironic-inspector (2.2.1-2) unstable; urgency=medium
 
   * Also rm /var/log/ironic-inspector on purge.
