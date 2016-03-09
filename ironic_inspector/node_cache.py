@@ -18,9 +18,10 @@ import json
 import time
 
 from ironicclient import exceptions
+from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_db import exception as db_exc
-from oslo_log import log
+from oslo_utils import excutils
 from sqlalchemy import text
 
 from ironic_inspector import db
@@ -30,17 +31,35 @@ from ironic_inspector import utils
 CONF = cfg.CONF
 
 
-LOG = log.getLogger("ironic_inspector.node_cache")
+LOG = utils.getProcessingLogger(__name__)
 
 
 MACS_ATTRIBUTE = 'mac'
+_LOCK_TEMPLATE = 'node-%s'
+_SEMAPHORES = lockutils.Semaphores()
+
+
+def _get_lock(uuid):
+    """Get lock object for a given node UUID."""
+    return lockutils.internal_lock(_LOCK_TEMPLATE % uuid,
+                                   semaphores=_SEMAPHORES)
+
+
+def _get_lock_ctx(uuid):
+    """Get context manager yielding a lock object for a given node UUID."""
+    return lockutils.lock(_LOCK_TEMPLATE % uuid, semaphores=_SEMAPHORES)
 
 
 class NodeInfo(object):
-    """Record about a node in the cache."""
+    """Record about a node in the cache.
 
-    def __init__(self, uuid, started_at, finished_at=None, error=None,
-                 node=None, ports=None, ironic=None):
+    This class optionally allows to acquire a lock on a node. Note that the
+    class instance itself is NOT thread-safe, you need to create a new instance
+    for every thread.
+    """
+
+    def __init__(self, uuid, started_at=None, finished_at=None, error=None,
+                 node=None, ports=None, ironic=None, lock=None):
         self.uuid = uuid
         self.started_at = started_at
         self.finished_at = finished_at
@@ -52,6 +71,48 @@ class NodeInfo(object):
         self._ports = ports
         self._attributes = None
         self._ironic = ironic
+        # This is a lock on a node UUID, not on a NodeInfo object
+        self._lock = lock if lock is not None else _get_lock(uuid)
+        # Whether lock was acquired using this NodeInfo object
+        self._locked = lock is not None
+
+    def __del__(self):
+        if self._locked:
+            LOG.warning(_LW('BUG: node lock was not released by the moment '
+                            'node info object is deleted'))
+            self._lock.release()
+
+    def acquire_lock(self, blocking=True):
+        """Acquire a lock on the associated node.
+
+        Exits with success if a lock is already acquired using this NodeInfo
+        object.
+
+        :param blocking: if True, wait for lock to be acquired, otherwise
+                         return immediately.
+        :returns: boolean value, whether lock was acquired successfully
+        """
+        if self._locked:
+            return True
+
+        LOG.debug('Attempting to acquire lock', node_info=self)
+        if self._lock.acquire(blocking):
+            self._locked = True
+            LOG.debug('Successfully acquired lock', node_info=self)
+            return True
+        else:
+            LOG.debug('Unable to acquire lock', node_info=self)
+            return False
+
+    def release_lock(self):
+        """Release a lock on a node.
+
+        Does nothing if lock was not acquired using this NodeInfo object.
+        """
+        if self._locked:
+            LOG.debug('Successfully released lock', node_info=self)
+            self._lock.release()
+        self._locked = False
 
     @property
     def options(self):
@@ -98,6 +159,8 @@ class NodeInfo(object):
 
         :param error: error message
         """
+        self.release_lock()
+
         self.finished_at = time.time()
         self.error = error
 
@@ -128,19 +191,20 @@ class NodeInfo(object):
                         session)
             except db_exc.DBDuplicateEntry as exc:
                 LOG.error(_LE('Database integrity error %s during '
-                              'adding attributes'), exc)
+                              'adding attributes'), exc, node_info=self)
                 raise utils.Error(_(
                     'Some or all of %(name)s\'s %(value)s are already '
-                    'on introspection') % {'name': name, 'value': value})
+                    'on introspection') % {'name': name, 'value': value},
+                    node_info=self)
             # Invalidate attributes so they're loaded on next usage
             self._attributes = None
 
     @classmethod
-    def from_row(cls, row, ironic=None):
+    def from_row(cls, row, ironic=None, lock=None):
         """Construct NodeInfo from a database row."""
         fields = {key: row[key]
                   for key in ('uuid', 'started_at', 'finished_at', 'error')}
-        return cls(ironic=ironic, **fields)
+        return cls(ironic=ironic, lock=lock, **fields)
 
     def invalidate_cache(self):
         """Clear all cached info, so that it's reloaded next time."""
@@ -165,8 +229,8 @@ class NodeInfo(object):
             if mac not in self.ports():
                 self._create_port(mac)
             else:
-                LOG.warn(_LW('Port %(mac)s already exists for node %(uuid)s, '
-                             'skipping'), {'mac': mac, 'uuid': self.uuid})
+                LOG.warning(_LW('Port %s already exists, skipping'),
+                            mac, node_info=self)
 
     def ports(self):
         """Get Ironic port objects associated with the cached node record.
@@ -184,8 +248,8 @@ class NodeInfo(object):
         try:
             port = self.ironic.port.create(node_uuid=self.uuid, address=mac)
         except exceptions.Conflict:
-            LOG.warn(_LW('Port %(mac)s already exists for node %(uuid)s, '
-                         'skipping'), {'mac': mac, 'uuid': self.uuid})
+            LOG.warning(_LW('Port %s already exists, skipping'),
+                        mac, node_info=self)
             # NOTE(dtantsur): we didn't get port object back, so we have to
             # reload ports on next access
             self._ports = None
@@ -200,8 +264,7 @@ class NodeInfo(object):
         :param patches: JSON patches to apply
         :raises: ironicclient exceptions
         """
-        LOG.debug('Updating node %(uuid)s with patches %(patches)s',
-                  {'uuid': self.uuid, 'patches': patches})
+        LOG.debug('Updating node with patches %s', patches, node_info=self)
         self._node = self.ironic.node.update(self.uuid, patches)
 
     def patch_port(self, port, patches):
@@ -214,9 +277,9 @@ class NodeInfo(object):
         if isinstance(port, str):
             port = ports[port]
 
-        LOG.debug('Updating port %(mac)s of node %(uuid)s with patches '
-                  '%(patches)s',
-                  {'mac': port.address, 'uuid': self.uuid, 'patches': patches})
+        LOG.debug('Updating port %(mac)s with patches %(patches)s',
+                  {'mac': port.address, 'patches': patches},
+                  node_info=self)
         new_port = self.ironic.port.update(port.uuid, patches)
         ports[port.address] = new_port
 
@@ -328,23 +391,23 @@ def delete_nodes_not_in_list(uuids):
     """
     inspector_uuids = _list_node_uuids()
     for uuid in inspector_uuids - uuids:
-        LOG.warn(_LW('Node %s was deleted from Ironic, dropping from Ironic '
-                     'Inspector database'), uuid)
-        _delete_node(uuid)
+        LOG.warning(
+            _LW('Node %s was deleted from Ironic, dropping from Ironic '
+                'Inspector database'), uuid)
+        with _get_lock_ctx(uuid):
+            _delete_node(uuid)
 
 
 def _delete_node(uuid, session=None):
     """Delete information about a node.
 
     :param uuid: Ironic node UUID
+    :param session: optional existing database session
     """
     with db.ensure_transaction(session) as session:
-        (db.model_query(db.Node, session=session).filter_by(uuid=uuid).
-            delete())
-        (db.model_query(db.Attribute, session=session).filter_by(uuid=uuid).
-            delete(synchronize_session=False))
-        (db.model_query(db.Option, session=session).filter_by(uuid=uuid).
-            delete())
+        for model in (db.Attribute, db.Option, db.Node):
+            db.model_query(model,
+                           session=session).filter_by(uuid=uuid).delete()
 
 
 def active_macs():
@@ -361,22 +424,36 @@ def _list_node_uuids():
     return {x.uuid for x in db.model_query(db.Node.uuid)}
 
 
-def get_node(uuid, ironic=None):
+def get_node(uuid, ironic=None, locked=False):
     """Get node from cache by it's UUID.
 
     :param uuid: node UUID.
     :param ironic: optional ironic client instance
+    :param locked: if True, get a lock on node before fetching its data
     :returns: structure NodeInfo.
     """
-    row = db.model_query(db.Node).filter_by(uuid=uuid).first()
-    if row is None:
-        raise utils.Error(_('Could not find node %s in cache') % uuid,
-                          code=404)
-    return NodeInfo.from_row(row, ironic=ironic)
+    if locked:
+        lock = _get_lock(uuid)
+        lock.acquire()
+    else:
+        lock = None
+
+    try:
+        row = db.model_query(db.Node).filter_by(uuid=uuid).first()
+        if row is None:
+            raise utils.Error(_('Could not find node %s in cache') % uuid,
+                              code=404)
+        return NodeInfo.from_row(row, ironic=ironic, lock=lock)
+    except Exception:
+        with excutils.save_and_reraise_exception():
+            if lock is not None:
+                lock.release()
 
 
 def find_node(**attributes):
     """Find node in cache.
+
+    This function acquires a lock on a node.
 
     :param attributes: attributes known about this node (like macs, BMC etc)
                        also ironic client instance may be passed under 'ironic'
@@ -416,20 +493,28 @@ def find_node(**attributes):
             % {'attr': attributes, 'found': list(found)}, code=404)
 
     uuid = found.pop()
-    row = (db.model_query(db.Node.started_at, db.Node.finished_at).
-           filter_by(uuid=uuid).first())
+    node_info = NodeInfo(uuid=uuid, ironic=ironic)
+    node_info.acquire_lock()
 
-    if not row:
-        raise utils.Error(_(
-            'Could not find node %s in introspection cache, '
-            'probably it\'s not on introspection now') % uuid, code=404)
+    try:
+        row = (db.model_query(db.Node.started_at, db.Node.finished_at).
+               filter_by(uuid=uuid).first())
 
-    if row.finished_at:
-        raise utils.Error(_(
-            'Introspection for node %(node)s already finished on '
-            '%(finish)s') % {'node': uuid, 'finish': row.finished_at})
+        if not row:
+            raise utils.Error(_(
+                'Could not find node %s in introspection cache, '
+                'probably it\'s not on introspection now') % uuid, code=404)
 
-    return NodeInfo(uuid=uuid, started_at=row.started_at, ironic=ironic)
+        if row.finished_at:
+            raise utils.Error(_(
+                'Introspection for node %(node)s already finished on '
+                '%(finish)s') % {'node': uuid, 'finish': row.finished_at})
+
+        node_info.started_at = row.started_at
+        return node_info
+    except Exception:
+        with excutils.save_and_reraise_exception():
+            node_info.release_lock()
 
 
 def clean_up():
@@ -460,15 +545,20 @@ def clean_up():
             return []
 
         LOG.error(_LE('Introspection for nodes %s has timed out'), uuids)
-        query = db.model_query(db.Node, session=session).filter(
-            db.Node.started_at < threshold,
-            db.Node.finished_at.is_(None))
-        query.update({'finished_at': time.time(),
-                      'error': 'Introspection timeout'})
         for u in uuids:
-            db.model_query(db.Attribute, session=session).filter_by(
-                uuid=u).delete()
-            db.model_query(db.Option, session=session).filter_by(
-                uuid=u).delete()
+            node_info = get_node(u, locked=True)
+            try:
+                if node_info.finished_at or node_info.started_at > threshold:
+                    continue
+
+                db.model_query(db.Node, session=session).filter_by(
+                    uuid=u).update({'finished_at': time.time(),
+                                    'error': 'Introspection timeout'})
+                db.model_query(db.Attribute, session=session).filter_by(
+                    uuid=u).delete()
+                db.model_query(db.Option, session=session).filter_by(
+                    uuid=u).delete()
+            finally:
+                node_info.release_lock()
 
     return uuids

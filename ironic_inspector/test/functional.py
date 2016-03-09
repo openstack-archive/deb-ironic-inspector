@@ -45,6 +45,7 @@ manage_firewall = False
 enable_setting_ipmi_credentials = True
 [DEFAULT]
 debug = True
+auth_strategy = noauth
 [database]
 connection = sqlite:///%(db_file)s
 """
@@ -68,24 +69,29 @@ class Base(base.NodeTest):
 
         # https://github.com/openstack/ironic-inspector/blob/master/HTTP-API.rst  # noqa
         self.data = {
-            'cpus': 4,
-            'cpu_arch': 'x86_64',
-            'memory_mb': 12288,
-            'local_gb': 464,
-            'interfaces': {
-                'eth1': {'mac': self.macs[0], 'ip': '1.2.1.2'},
-                'eth2': {'mac': '12:12:21:12:21:12'},
-                'eth3': {'mac': self.macs[1], 'ip': '1.2.1.1'},
-            },
             'boot_interface': '01-' + self.macs[0].replace(':', '-'),
-            'ipmi_address': self.bmc_address,
             'inventory': {
+                'interfaces': [
+                    {'name': 'eth1', 'mac_address': self.macs[0],
+                     'ipv4_address': '1.2.1.2'},
+                    {'name': 'eth2', 'mac_address': '12:12:21:12:21:12'},
+                    {'name': 'eth3', 'mac_address': self.macs[1],
+                     'ipv4_address': '1.2.1.1'},
+                ],
                 'disks': [
                     {'name': '/dev/sda', 'model': 'Big Data Disk',
                      'size': 1000 * units.Gi},
                     {'name': '/dev/sdb', 'model': 'Small OS Disk',
                      'size': 20 * units.Gi},
-                ]
+                ],
+                'cpu': {
+                    'count': 4,
+                    'architecture': 'x86_64'
+                },
+                'memory': {
+                    'physical_mb': 12288
+                },
+                'bmc_address': self.bmc_address
             },
             'root_disk': {'name': '/dev/sda', 'model': 'Big Data Disk',
                           'size': 1000 * units.Gi},
@@ -364,32 +370,30 @@ def mocked_server():
             content = CONF % {'db_file': db_file}
             fp.write(content.encode('utf-8'))
 
-        with mock.patch.object(utils, 'check_auth'):
-            with mock.patch.object(utils, 'get_client'):
-                dbsync.main(args=['--config-file', conf_file, 'upgrade'])
+        with mock.patch.object(utils, 'get_client'):
+            dbsync.main(args=['--config-file', conf_file, 'upgrade'])
 
-                cfg.CONF.reset()
-                cfg.CONF.unregister_opt(dbsync.command_opt)
+            cfg.CONF.reset()
+            cfg.CONF.unregister_opt(dbsync.command_opt)
 
-                eventlet.greenthread.spawn_n(main.main,
-                                             args=['--config-file', conf_file],
-                                             in_functional_test=True)
-                eventlet.greenthread.sleep(1)
-                # Wait for service to start up to 30 seconds
-                for i in range(10):
-                    try:
-                        requests.get('http://127.0.0.1:5050/v1')
-                    except requests.ConnectionError:
-                        if i == 9:
-                            raise
-                        print('Service did not start yet')
-                        eventlet.greenthread.sleep(3)
-                    else:
-                        break
-                # start testing
-                yield
-                # Make sure all processes finished executing
-                eventlet.greenthread.sleep(1)
+            eventlet.greenthread.spawn_n(main.main,
+                                         args=['--config-file', conf_file])
+            eventlet.greenthread.sleep(1)
+            # Wait for service to start up to 30 seconds
+            for i in range(10):
+                try:
+                    requests.get('http://127.0.0.1:5050/v1')
+                except requests.ConnectionError:
+                    if i == 9:
+                        raise
+                    print('Service did not start yet')
+                    eventlet.greenthread.sleep(3)
+                else:
+                    break
+            # start testing
+            yield
+            # Make sure all processes finished executing
+            eventlet.greenthread.sleep(1)
     finally:
         shutil.rmtree(d)
 

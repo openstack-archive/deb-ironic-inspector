@@ -1,5 +1,6 @@
-IRONIC_INSPECTOR_DEBUG=${IRONIC_INSPECTOR_DEBUG:-false}
+IRONIC_INSPECTOR_DEBUG=${IRONIC_INSPECTOR_DEBUG:-True}
 IRONIC_INSPECTOR_DIR=$DEST/ironic-inspector
+IRONIC_INSPECTOR_DATA_DIR=$DATA_DIR/ironic-inspector
 IRONIC_INSPECTOR_BIN_DIR=$(get_python_exec_prefix)
 IRONIC_INSPECTOR_BIN_FILE=$IRONIC_INSPECTOR_BIN_DIR/ironic-inspector
 IRONIC_INSPECTOR_DBSYNC_BIN_FILE=$IRONIC_INSPECTOR_BIN_DIR/ironic-inspector-dbsync
@@ -9,12 +10,19 @@ IRONIC_INSPECTOR_CMD="$IRONIC_INSPECTOR_BIN_FILE --config-file $IRONIC_INSPECTOR
 IRONIC_INSPECTOR_DHCP_CONF_FILE=$IRONIC_INSPECTOR_CONF_DIR/dnsmasq.conf
 IRONIC_INSPECTOR_ROOTWRAP_CONF_FILE=$IRONIC_INSPECTOR_CONF_DIR/rootwrap.conf
 IRONIC_INSPECTOR_ADMIN_USER=${IRONIC_INSPECTOR_ADMIN_USER:-ironic-inspector}
-IRONIC_INSPECTOR_MANAGE_FIREWALL=$(trueorfalse True $IRONIC_INSPECTOR_MANAGE_FIREWALL)
+IRONIC_INSPECTOR_AUTH_CACHE_DIR=${IRONIC_INSPECTOR_AUTH_CACHE_DIR:-/var/cache/ironic-inspector}
+IRONIC_INSPECTOR_MANAGE_FIREWALL=$(trueorfalse True IRONIC_INSPECTOR_MANAGE_FIREWALL)
 IRONIC_INSPECTOR_HOST=$HOST_IP
 IRONIC_INSPECTOR_PORT=5050
 IRONIC_INSPECTOR_URI="http://$IRONIC_INSPECTOR_HOST:$IRONIC_INSPECTOR_PORT"
+IRONIC_INSPECTOR_BUILD_RAMDISK=$(trueorfalse False IRONIC_INSPECTOR_BUILD_RAMDISK)
+IRONIC_AGENT_KERNEL_URL=${IRONIC_AGENT_KERNEL_URL:-http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe.vmlinuz}
+IRONIC_AGENT_RAMDISK_URL=${IRONIC_AGENT_RAMDISK_URL:-http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe_image-oem.cpio.gz}
 IRONIC_INSPECTOR_RAMDISK_ELEMENT=${IRONIC_INSPECTOR_RAMDISK_ELEMENT:-ironic-discoverd-ramdisk}
 IRONIC_INSPECTOR_RAMDISK_FLAVOR=${IRONIC_INSPECTOR_RAMDISK_FLAVOR:-fedora $IRONIC_INSPECTOR_RAMDISK_ELEMENT}
+IRONIC_INSPECTOR_COLLECTORS=${IRONIC_INSPECTOR_COLLECTORS:-default,logs}
+IRONIC_INSPECTOR_RAMDISK_LOGDIR=${IRONIC_INSPECTOR_RAMDISK_LOGDIR:-$IRONIC_INSPECTOR_DATA_DIR/ramdisk-logs}
+IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS=${IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS:-True}
 # These should not overlap with other ranges/networks
 IRONIC_INSPECTOR_INTERNAL_IP=${IRONIC_INSPECTOR_INTERNAL_IP:-172.24.42.254}
 IRONIC_INSPECTOR_INTERNAL_SUBNET_SIZE=${IRONIC_INSPECTOR_INTERNAL_SUBNET_SIZE:-24}
@@ -80,27 +88,53 @@ function stop_inspector_dhcp {
     screen -S $SCREEN_NAME -p ironic-inspector-dhcp -X kill
 }
 
+function inspector_uses_ipa {
+    [[ $IRONIC_INSPECTOR_RAMDISK_ELEMENT = "ironic-agent" ]] || [[ $IRONIC_INSPECTOR_RAMDISK_FLAVOR =~ (ironic-agent$|^ironic-agent) ]] && return 0
+    return 1
+}
+
 ### Configuration
 
 function prepare_tftp {
     IRONIC_INSPECTOR_IMAGE_PATH="$TOP_DIR/files/ironic-inspector"
-    IRONIC_INSPECTOR_KERNEL_PATH="$IRONIC_INSPECTOR_IMAGE_PATH.kernel"
     IRONIC_INSPECTOR_INITRAMFS_PATH="$IRONIC_INSPECTOR_IMAGE_PATH.initramfs"
+    IRONIC_INSPECTOR_CALLBACK_URI="$IRONIC_INSPECTOR_INTERNAL_URI/v1/continue"
 
-    if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
-        if [[ $(type -P ramdisk-image-create) == "" ]]; then
-            pip_install diskimage_builder
+    if  inspector_uses_ipa; then
+        IRONIC_INSPECTOR_KERNEL_CMDLINE="ipa-inspection-callback-url=$IRONIC_INSPECTOR_CALLBACK_URI systemd.journald.forward_to_console=yes"
+        IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE ipa-inspection-collectors=$IRONIC_INSPECTOR_COLLECTORS"
+        if [[ "$IRONIC_INSPECTOR_BUILD_RAMDISK" == "True" ]]; then
+            IRONIC_INSPECTOR_KERNEL_PATH="$IRONIC_INSPECTOR_IMAGE_PATH.vmlinuz"
+            if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
+                if [[ $(type -P disk-image-create) == "" ]]; then
+                    pip_install_gr diskimage-builder
+                fi
+                disk-image-create $IRONIC_INSPECTOR_RAMDISK_FLAVOR \
+                    -o $IRONIC_INSPECTOR_IMAGE_PATH
+                sudo chown $STACK_USER $IRONIC_INSPECTOR_KERNEL_PATH
+            fi
+        else
+            # download the agent image tarball
+            IRONIC_INSPECTOR_KERNEL_PATH="$IRONIC_INSPECTOR_IMAGE_PATH.kernel"
+            wget "$IRONIC_AGENT_KERNEL_URL" -O $IRONIC_INSPECTOR_KERNEL_PATH
+            wget "$IRONIC_AGENT_RAMDISK_URL" -O $IRONIC_INSPECTOR_INITRAMFS_PATH
         fi
-        ramdisk-image-create $IRONIC_INSPECTOR_RAMDISK_FLAVOR \
-            -o $IRONIC_INSPECTOR_IMAGE_PATH
+    else
+        IRONIC_INSPECTOR_KERNEL_PATH="$IRONIC_INSPECTOR_IMAGE_PATH.kernel"
+        IRONIC_INSPECTOR_KERNEL_CMDLINE="discoverd_callback_url=$IRONIC_INSPECTOR_CALLBACK_URI inspector_callback_url=$IRONIC_INSPECTOR_CALLBACK_URI"
+        if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
+            if [[ $(type -P ramdisk-image-create) == "" ]]; then
+                pip_install diskimage_builder
+            fi
+            ramdisk-image-create $IRONIC_INSPECTOR_RAMDISK_FLAVOR \
+                -o $IRONIC_INSPECTOR_IMAGE_PATH
+        fi
     fi
 
     mkdir_chown_stack "$IRONIC_TFTPBOOT_DIR/pxelinux.cfg"
-    cp $IRONIC_INSPECTOR_KERNEL_PATH $IRONIC_INSPECTOR_INITRAMFS_PATH \
-        $IRONIC_TFTPBOOT_DIR
+    cp $IRONIC_INSPECTOR_KERNEL_PATH $IRONIC_TFTPBOOT_DIR/ironic-inspector.kernel
+    cp $IRONIC_INSPECTOR_INITRAMFS_PATH $IRONIC_TFTPBOOT_DIR
 
-    IRONIC_INSPECTOR_CALLBACK_URI="$IRONIC_INSPECTOR_INTERNAL_URI/v1/continue"
-    IRONIC_INSPECTOR_KERNEL_CMDLINE="discoverd_callback_url=$IRONIC_INSPECTOR_CALLBACK_URI inspector_callback_url=$IRONIC_INSPECTOR_CALLBACK_URI"
     cat > "$IRONIC_TFTPBOOT_DIR/pxelinux.cfg/default" <<EOF
 default inspect
 
@@ -124,11 +158,7 @@ function configure_inspector {
     inspector_iniset ironic os_password $SERVICE_PASSWORD
     inspector_iniset ironic os_tenant_name $SERVICE_TENANT_NAME
 
-    inspector_iniset keystone_authtoken identity_uri "$KEYSTONE_AUTH_URI"
-    inspector_iniset keystone_authtoken auth_uri "$KEYSTONE_SERVICE_URI/v2.0"
-    inspector_iniset keystone_authtoken admin_user $IRONIC_INSPECTOR_ADMIN_USER
-    inspector_iniset keystone_authtoken admin_password $SERVICE_PASSWORD
-    inspector_iniset keystone_authtoken admin_tenant_name $SERVICE_TENANT_NAME
+    configure_auth_token_middleware $IRONIC_INSPECTOR_CONF_FILE $IRONIC_INSPECTOR_ADMIN_USER $IRONIC_INSPECTOR_AUTH_CACHE_DIR/api
 
     inspector_iniset DEFAULT listen_port $IRONIC_INSPECTOR_PORT
     inspector_iniset DEFAULT listen_address 0.0.0.0  # do not change
@@ -159,6 +189,11 @@ function configure_inspector {
     sudo mv $tempfile /etc/sudoers.d/ironic-inspector-rootwrap
 
     inspector_iniset DEFAULT rootwrap_config $IRONIC_INSPECTOR_ROOTWRAP_CONF_FILE
+
+    mkdir_chown_stack "$IRONIC_INSPECTOR_RAMDISK_LOGDIR"
+    inspector_iniset processing ramdisk_logs_dir "$IRONIC_INSPECTOR_RAMDISK_LOGDIR"
+    inspector_iniset processing always_store_ramdisk_logs "$IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS"
+    inspector_iniset processing log_bmc_address False
 }
 
 function configure_inspector_swift {
@@ -185,6 +220,7 @@ EOF
 
 function prepare_environment {
     prepare_tftp
+    create_ironic_inspector_cache_dir
 
     sudo ip link add brbm-inspector type veth peer name $IRONIC_INSPECTOR_INTERFACE
     sudo ip link set dev brbm-inspector up
@@ -198,10 +234,21 @@ function prepare_environment {
         --dport $IRONIC_INSPECTOR_PORT -j ACCEPT
 }
 
+# create_ironic_inspector_cache_dir() - Part of the prepare_environment() process
+function create_ironic_inspector_cache_dir {
+    # Create cache dir
+    mkdir_chown_stack $IRONIC_INSPECTOR_AUTH_CACHE_DIR/api
+    rm -f $IRONIC_INSPECTOR_AUTH_CACHE_DIR/api/*
+    mkdir_chown_stack $IRONIC_INSPECTOR_AUTH_CACHE_DIR/registry
+    rm -f $IRONIC_INSPECTOR_AUTH_CACHE_DIR/registry/*
+}
+
 function cleanup_inspector {
     rm -f $IRONIC_TFTPBOOT_DIR/pxelinux.cfg/default
     rm -f $IRONIC_TFTPBOOT_DIR/ironic-inspector.*
     sudo rm -f /etc/sudoers.d/ironic-inspector-rootwrap
+    sudo rm -rf $IRONIC_INSPECTOR_AUTH_CACHE_DIR
+    sudo rm -rf "$IRONIC_INSPECTOR_RAMDISK_LOGDIR"
 
     # Try to clean up firewall rules
     sudo iptables -D INPUT -i $IRONIC_INSPECTOR_INTERFACE -p udp \

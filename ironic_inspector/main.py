@@ -42,13 +42,14 @@ CONF = cfg.CONF
 
 
 app = flask.Flask(__name__)
-LOG = log.getLogger('ironic_inspector.main')
+LOG = utils.getProcessingLogger(__name__)
 
 MINIMUM_API_VERSION = (1, 0)
 CURRENT_API_VERSION = (1, 2)
 _MIN_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Minimum-Version'
 _MAX_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Maximum-Version'
 _VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Version'
+_LOGGING_EXCLUDED_KEYS = ('logs',)
 
 
 def _format_version(ver):
@@ -165,7 +166,14 @@ def version_root(version):
 @convert_exceptions
 def api_continue():
     data = flask.request.get_json(force=True)
-    LOG.debug("/v1/continue got JSON %s", data)
+    if not isinstance(data, dict):
+        raise utils.Error(_('Invalid data: expected a JSON object, got %s') %
+                          data.__class__.__name__)
+
+    logged_data = {k: (v if k not in _LOGGING_EXCLUDED_KEYS else '<hidden>')
+                   for k, v in data.items()}
+    LOG.debug("Received data from the ramdisk: %s", logged_data,
+              data=data)
 
     return flask.jsonify(process.process(data))
 
@@ -364,21 +372,24 @@ def create_ssl_context():
     return context
 
 
-def main(args=sys.argv[1:], in_functional_test=False):  # pragma: no cover
+def main(args=sys.argv[1:]):  # pragma: no cover
     log.register_options(CONF)
     CONF(args, project='ironic-inspector')
-    debug = CONF.debug
 
     log.set_defaults(default_log_levels=[
-        'urllib3.connectionpool=WARN',
-        'keystonemiddleware.auth_token=WARN',
-        'requests.packages.urllib3.connectionpool=WARN',
-        ('ironicclient.common.http=INFO' if debug else
-         'ironicclient.common.http=ERROR')])
+        'sqlalchemy=WARNING',
+        'keystoneclient=INFO',
+        'iso8601=WARNING',
+        'requests=WARNING',
+        'urllib3.connectionpool=WARNING',
+        'keystonemiddleware=WARNING',
+        'swiftclient=WARNING',
+        'keystoneauth=WARNING',
+        'ironicclient=WARNING'
+    ])
     log.setup(CONF, 'ironic_inspector')
 
-    app_kwargs = {'debug': debug and not in_functional_test,
-                  'host': CONF.listen_address,
+    app_kwargs = {'host': CONF.listen_address,
                   'port': CONF.listen_port}
 
     context = create_ssl_context()

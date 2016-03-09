@@ -33,13 +33,6 @@ class BaseTest(test_base.NodeTest):
         super(BaseTest, self).setUp()
         introspect._LAST_INTROSPECTION_TIME = 0
         self.node.power_state = 'power off'
-        self.node_compat = mock.Mock(driver='pxe_ssh',
-                                     uuid='uuid_compat',
-                                     driver_info={},
-                                     maintenance=True,
-                                     # allowed with maintenance=True
-                                     power_state='power on',
-                                     provision_state='foobar')
         self.ports = [mock.Mock(address=m) for m in self.macs]
         self.ports_dict = collections.OrderedDict((p.address, p)
                                                   for p in self.ports)
@@ -82,8 +75,10 @@ class TestIntrospect(BaseTest):
                                                          persistent=False)
         cli.node.set_power_state.assert_called_once_with(self.uuid,
                                                          'reboot')
-        add_mock.return_value.set_option.assert_called_once_with(
+        self.node_info.set_option.assert_called_once_with(
             'new_ipmi_credentials', None)
+        self.node_info.acquire_lock.assert_called_once_with()
+        self.node_info.release_lock.assert_called_once_with()
 
     def test_ok_ilo_and_drac(self, client_mock, add_mock, filters_mock):
         cli = self._prepare(client_mock)
@@ -117,6 +112,8 @@ class TestIntrospect(BaseTest):
                                                          'reboot')
         add_mock.return_value.finished.assert_called_once_with(
             error=mock.ANY)
+        self.node_info.acquire_lock.assert_called_once_with()
+        self.node_info.release_lock.assert_called_once_with()
 
     def test_unexpected_error(self, client_mock, add_mock, filters_mock):
         cli = self._prepare(client_mock)
@@ -133,34 +130,8 @@ class TestIntrospect(BaseTest):
         self.assertFalse(cli.node.set_boot_device.called)
         add_mock.return_value.finished.assert_called_once_with(
             error=mock.ANY)
-
-    def test_with_maintenance(self, client_mock, add_mock, filters_mock):
-        cli = client_mock.return_value
-        cli.node.get.return_value = self.node_compat
-        cli.node.validate.return_value = mock.Mock(power={'result': True})
-        add_mock.return_value = mock.Mock(uuid=self.node_compat.uuid,
-                                          options={},
-                                          **{'node.return_value': self.node})
-        add_mock.return_value.ports.return_value = collections.OrderedDict(
-            (p.address, p) for p in self.ports)
-
-        introspect.introspect(self.node_compat.uuid)
-
-        cli.node.get.assert_called_once_with(self.node_compat.uuid)
-        cli.node.validate.assert_called_once_with(self.node_compat.uuid)
-        add_mock.return_value.ports.assert_called_once_with()
-
-        add_mock.assert_called_once_with(self.node_compat.uuid,
-                                         bmc_address=None,
-                                         ironic=cli)
-        add_mock.return_value.add_attribute.assert_called_once_with('mac',
-                                                                    self.macs)
-        filters_mock.assert_called_with(cli)
-        cli.node.set_boot_device.assert_called_once_with(self.node_compat.uuid,
-                                                         'pxe',
-                                                         persistent=False)
-        cli.node.set_power_state.assert_called_once_with(self.node_compat.uuid,
-                                                         'reboot')
+        self.node_info.acquire_lock.assert_called_once_with()
+        self.node_info.release_lock.assert_called_once_with()
 
     def test_no_macs(self, client_mock, add_mock, filters_mock):
         cli = self._prepare(client_mock)
@@ -194,6 +165,8 @@ class TestIntrospect(BaseTest):
         self.node_info.finished.assert_called_once_with(error=mock.ANY)
         self.assertEqual(0, filters_mock.call_count)
         self.assertEqual(0, cli.node.set_power_state.call_count)
+        self.node_info.acquire_lock.assert_called_once_with()
+        self.node_info.release_lock.assert_called_once_with()
 
     def test_no_lookup_attrs_with_node_not_found_hook(self, client_mock,
                                                       add_mock, filters_mock):
@@ -229,6 +202,7 @@ class TestIntrospect(BaseTest):
         self.assertEqual(0, filters_mock.call_count)
         self.assertEqual(0, cli.node.set_power_state.call_count)
         self.assertFalse(add_mock.called)
+        self.assertFalse(self.node_info.acquire_lock.called)
 
     def test_failed_to_validate_node(self, client_mock, add_mock,
                                      filters_mock):
@@ -239,7 +213,7 @@ class TestIntrospect(BaseTest):
 
         self.assertRaisesRegexp(
             utils.Error,
-            'Failed validation of power interface for node',
+            'Failed validation of power interface',
             introspect.introspect, self.uuid)
 
         cli.node.validate.assert_called_once_with(self.uuid)
@@ -247,6 +221,7 @@ class TestIntrospect(BaseTest):
         self.assertEqual(0, filters_mock.call_count)
         self.assertEqual(0, cli.node.set_power_state.call_count)
         self.assertFalse(add_mock.called)
+        self.assertFalse(self.node_info.acquire_lock.called)
 
     def test_wrong_provision_state(self, client_mock, add_mock, filters_mock):
         self.node.provision_state = 'active'
@@ -254,13 +229,14 @@ class TestIntrospect(BaseTest):
         cli.node.get.return_value = self.node
 
         self.assertRaisesRegexp(
-            utils.Error, 'Invalid provision state "active"',
+            utils.Error, 'Invalid provision state for introspection: "active"',
             introspect.introspect, self.uuid)
 
         self.assertEqual(0, self.node_info.ports.call_count)
         self.assertEqual(0, filters_mock.call_count)
         self.assertEqual(0, cli.node.set_power_state.call_count)
         self.assertFalse(add_mock.called)
+        self.assertFalse(self.node_info.acquire_lock.called)
 
     @mock.patch.object(time, 'sleep')
     @mock.patch.object(time, 'time')
@@ -372,25 +348,6 @@ class TestSetIpmiCredentials(BaseTest):
         self.node.provision_state = 'enroll'
 
     def test_ok(self, client_mock, add_mock, filters_mock):
-        cli = self._prepare(client_mock)
-        add_mock.return_value = self.node_info
-
-        introspect.introspect(self.uuid, new_ipmi_credentials=self.new_creds)
-
-        add_mock.assert_called_once_with(self.uuid,
-                                         bmc_address=self.bmc_address,
-                                         ironic=cli)
-        filters_mock.assert_called_with(cli)
-        self.assertFalse(cli.node.validate.called)
-        self.assertFalse(cli.node.set_boot_device.called)
-        self.assertFalse(cli.node.set_power_state.called)
-        add_mock.return_value.set_option.assert_called_once_with(
-            'new_ipmi_credentials', self.new_creds)
-
-    def test_any_state_with_maintenance(self, client_mock, add_mock,
-                                        filters_mock):
-        self.node.provision_state = 'manageable'
-        self.node.maintenance = True
         cli = self._prepare(client_mock)
         add_mock.return_value = self.node_info
 
