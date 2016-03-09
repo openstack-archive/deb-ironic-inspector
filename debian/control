@@ -35,7 +35,7 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      python-sqlalchemy (>= 1.0.10),
                      python-stevedore (>= 1.5.0),
                      python-swiftclient (>= 1:2.2.0),
-Standards-Version: 3.9.6
+Standards-Version: 3.9.7
 Vcs-Git: https://anonscm.debian.org/git/openstack/ironic-inspector.git
 Vcs-Browser: https://anonscm.debian.org/cgit/openstack/ironic-inspector.git/
 Homepage: https://github.com/openstack/ironic-inspector
