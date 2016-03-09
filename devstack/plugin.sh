@@ -148,6 +148,7 @@ EOF
 
 function configure_inspector {
     mkdir_chown_stack "$IRONIC_INSPECTOR_CONF_DIR"
+    mkdir_chown_stack "$IRONIC_INSPECTOR_DATA_DIR"
 
     create_service_user "$IRONIC_INSPECTOR_ADMIN_USER" "admin"
 
