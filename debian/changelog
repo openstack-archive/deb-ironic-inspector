@@ -1,3 +1,9 @@
+ironic-inspector (3.2.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 22 Mar 2016 13:44:01 +0100
+
 ironic-inspector (3.0.0-1) experimental; urgency=medium
 
   [ Ondřej Nový ]
