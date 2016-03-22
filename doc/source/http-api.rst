@@ -51,7 +51,25 @@ Response body: JSON dictionary with keys:
 
 * ``finished`` (boolean) whether introspection is finished
   (``true`` on introspection completion or if it ends because of an error)
-* ``error`` error string or ``null``
+* ``error`` error string or ``null``; ``Canceled by operator`` in
+  case introspection was aborted
+
+
+Abort Running Introspection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``POST /v1/introspection/<UUID>/abort`` abort running introspection.
+
+Requires X-Auth-Token header with Keystone token for authentication.
+
+Response:
+
+* 202 - accepted
+* 400 - bad request
+* 401, 403 - missing or invalid authentication
+* 404 - node cannot be found
+* 409 - inspector has locked this node for processing
+
 
 Get Introspection Data
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -69,6 +87,11 @@ Response:
 * 404 - data cannot be found or data storage not configured
 
 Response body: JSON dictionary with introspection data
+
+.. note::
+    We do not provide any backward compatibility guarantees regarding the
+    format and contents of the stored data. Notably, it depends on the ramdisk
+    used and plugins enabled both in the ramdisk and in inspector itself.
 
 Introspection Rules
 ~~~~~~~~~~~~~~~~~~~
@@ -132,6 +155,8 @@ authentication.
   * 204 - OK
   * 404 - not found
 
+.. _ramdisk_callback:
+
 Ramdisk Callback
 ~~~~~~~~~~~~~~~~
 
@@ -139,7 +164,7 @@ Ramdisk Callback
 discovered data. Should not be used for anything other than implementing
 the ramdisk. Request body: JSON dictionary with at least these keys:
 
-* ``inventory`` full hardware inventory from the ironic-python-agent with at
+* ``inventory`` full `hardware inventory`_ from the ironic-python-agent with at
   least the following keys:
 
   * ``memory`` memory information containing at least key ``physical_mb`` -
@@ -211,6 +236,8 @@ body will contain the following keys:
 * ``ipmi_setup_credentials`` boolean ``True``
 * ``ipmi_username`` new IPMI user name
 * ``ipmi_password`` new IPMI password
+
+.. _hardware inventory: http://docs.openstack.org/developer/ironic-python-agent/#hardware-inventory
 
 Error Response
 ~~~~~~~~~~~~~~
@@ -295,3 +322,4 @@ Version History
 * **1.0** version of API at the moment of introducing versioning.
 * **1.1** adds endpoint to retrieve stored introspection data.
 * **1.2** endpoints for manipulating introspection rules.
+* **1.3** endpoint for canceling running introspection

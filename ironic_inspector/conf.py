@@ -12,69 +12,16 @@
 # limitations under the License.
 
 from oslo_config import cfg
+from oslo_middleware import cors
 
+
+MIN_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Minimum-Version'
+MAX_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Maximum-Version'
+VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Version'
 
 VALID_ADD_PORTS_VALUES = ('all', 'active', 'pxe')
 VALID_KEEP_PORTS_VALUES = ('all', 'present', 'added')
 VALID_STORE_DATA_VALUES = ('none', 'swift')
-
-
-IRONIC_OPTS = [
-    cfg.StrOpt('os_auth_url',
-               default='',
-               help='Keystone authentication endpoint for accessing Ironic '
-                    'API. Use [keystone_authtoken]/auth_uri for keystone '
-                    'authentication.',
-               deprecated_group='discoverd'),
-    cfg.StrOpt('os_username',
-               default='',
-               help='User name for accessing Ironic API. '
-                    'Use [keystone_authtoken]/admin_user for keystone '
-                    'authentication.',
-               deprecated_group='discoverd'),
-    cfg.StrOpt('os_password',
-               default='',
-               help='Password for accessing Ironic API. '
-                    'Use [keystone_authtoken]/admin_password for keystone '
-                    'authentication.',
-               secret=True,
-               deprecated_group='discoverd'),
-    cfg.StrOpt('os_tenant_name',
-               default='',
-               help='Tenant name for accessing Ironic API. '
-                    'Use [keystone_authtoken]/admin_tenant_name for keystone '
-                    'authentication.',
-               deprecated_group='discoverd'),
-    cfg.StrOpt('identity_uri',
-               default='',
-               help='Keystone admin endpoint. '
-                    'DEPRECATED: use [keystone_authtoken]/identity_uri.',
-               deprecated_group='discoverd',
-               deprecated_for_removal=True),
-    cfg.StrOpt('auth_strategy',
-               default='keystone',
-               choices=('keystone', 'noauth'),
-               help='Method to use for authentication: noauth or keystone.'),
-    cfg.StrOpt('ironic_url',
-               default='http://localhost:6385/',
-               help='Ironic API URL, used to set Ironic API URL when '
-                    'auth_strategy option is noauth to work with standalone '
-                    'Ironic without keystone.'),
-    cfg.StrOpt('os_service_type',
-               default='baremetal',
-               help='Ironic service type.'),
-    cfg.StrOpt('os_endpoint_type',
-               default='internalURL',
-               help='Ironic endpoint type.'),
-    cfg.IntOpt('retry_interval',
-               default=2,
-               help='Interval between retries in case of conflict error '
-               '(HTTP 409).'),
-    cfg.IntOpt('max_retries',
-               default=30,
-               help='Maximum number of retries in case of conflict error '
-               '(HTTP 409).'),
-]
 
 
 FIREWALL_OPTS = [
@@ -240,7 +187,7 @@ SERVICE_OPTS = [
                default='',
                help='Path to SSL key'),
     cfg.IntOpt('max_concurrency',
-               default=1000,
+               default=1000, min=2,
                help='The green thread pool size.'),
     cfg.IntOpt('introspection_delay',
                default=5,
@@ -263,7 +210,6 @@ SERVICE_OPTS = [
 cfg.CONF.register_opts(SERVICE_OPTS)
 cfg.CONF.register_opts(FIREWALL_OPTS, group='firewall')
 cfg.CONF.register_opts(PROCESSING_OPTS, group='processing')
-cfg.CONF.register_opts(IRONIC_OPTS, group='ironic')
 cfg.CONF.register_opts(DISCOVERD_OPTS, group='discoverd')
 
 
@@ -271,7 +217,25 @@ def list_opts():
     return [
         ('', SERVICE_OPTS),
         ('firewall', FIREWALL_OPTS),
-        ('ironic', IRONIC_OPTS),
         ('processing', PROCESSING_OPTS),
         ('discoverd', DISCOVERD_OPTS),
     ]
+
+
+def set_config_defaults():
+    """This method updates all configuration default values."""
+    set_cors_middleware_defaults()
+
+
+def set_cors_middleware_defaults():
+    """Update default configuration options for oslo.middleware."""
+    # TODO(krotscheck): Update with https://review.openstack.org/#/c/285368/
+    cfg.set_defaults(
+        cors.CORS_OPTS,
+        allow_headers=['X-Auth-Token',
+                       MIN_VERSION_HEADER,
+                       MAX_VERSION_HEADER,
+                       VERSION_HEADER],
+        allow_methods=['GET', 'POST', 'PUT', 'HEAD',
+                       'PATCH', 'DELETE', 'OPTIONS']
+    )

@@ -21,6 +21,7 @@ import ssl
 import sys
 
 import flask
+from futurist import periodics
 from oslo_config import cfg
 from oslo_log import log
 from oslo_utils import uuidutils
@@ -28,6 +29,7 @@ import werkzeug
 
 from ironic_inspector import db
 from ironic_inspector.common.i18n import _, _LC, _LE, _LI, _LW
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector.common import swift
 from ironic_inspector import conf  # noqa
 from ironic_inspector import firewall
@@ -45,10 +47,7 @@ app = flask.Flask(__name__)
 LOG = utils.getProcessingLogger(__name__)
 
 MINIMUM_API_VERSION = (1, 0)
-CURRENT_API_VERSION = (1, 2)
-_MIN_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Minimum-Version'
-_MAX_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Maximum-Version'
-_VERSION_HEADER = 'X-OpenStack-Ironic-Inspector-API-Version'
+CURRENT_API_VERSION = (1, 3)
 _LOGGING_EXCLUDED_KEYS = ('logs',)
 
 
@@ -87,7 +86,7 @@ def convert_exceptions(func):
 
 @app.before_request
 def check_api_version():
-    requested = flask.request.headers.get(_VERSION_HEADER,
+    requested = flask.request.headers.get(conf.VERSION_HEADER,
                                           _DEFAULT_API_VERSION)
     try:
         requested = tuple(int(x) for x in requested.split('.'))
@@ -106,8 +105,8 @@ def check_api_version():
 
 @app.after_request
 def add_version_headers(res):
-    res.headers[_MIN_VERSION_HEADER] = '%s.%s' % MINIMUM_API_VERSION
-    res.headers[_MAX_VERSION_HEADER] = '%s.%s' % CURRENT_API_VERSION
+    res.headers[conf.MIN_VERSION_HEADER] = '%s.%s' % MINIMUM_API_VERSION
+    res.headers[conf.MAX_VERSION_HEADER] = '%s.%s' % CURRENT_API_VERSION
     return res
 
 
@@ -209,6 +208,18 @@ def api_introspection(uuid):
                                   error=node_info.error or None)
 
 
+@app.route('/v1/introspection/<uuid>/abort', methods=['POST'])
+@convert_exceptions
+def api_introspection_abort(uuid):
+    utils.check_auth(flask.request)
+
+    if not uuidutils.is_uuid_like(uuid):
+        raise utils.Error(_('Invalid UUID value'), code=400)
+
+    introspect.abort(uuid, token=flask.request.headers.get('X-Auth-Token'))
+    return '', 202
+
+
 @app.route('/v1/introspection/<uuid>/data', methods=['GET'])
 @convert_exceptions
 def api_introspection_data(uuid):
@@ -273,72 +284,31 @@ def handle_404(error):
     return error_response(error, code=404)
 
 
-def periodic_update(period):  # pragma: no cover
-    while True:
-        LOG.debug('Running periodic update of filters')
-        try:
+@periodics.periodic(spacing=CONF.firewall.firewall_update_period,
+                    enabled=CONF.firewall.manage_firewall)
+def periodic_update():  # pragma: no cover
+    try:
+        firewall.update_filters()
+    except Exception:
+        LOG.exception(_LE('Periodic update of firewall rules failed'))
+
+
+@periodics.periodic(spacing=CONF.clean_up_period)
+def periodic_clean_up():  # pragma: no cover
+    try:
+        if node_cache.clean_up():
             firewall.update_filters()
-        except Exception:
-            LOG.exception(_LE('Periodic update failed'))
-        eventlet.greenthread.sleep(period)
-
-
-def periodic_clean_up(period):  # pragma: no cover
-    while True:
-        LOG.debug('Running periodic clean up of node cache')
-        try:
-            if node_cache.clean_up():
-                firewall.update_filters()
-            sync_with_ironic()
-        except Exception:
-            LOG.exception(_LE('Periodic clean up of node cache failed'))
-        eventlet.greenthread.sleep(period)
+        sync_with_ironic()
+    except Exception:
+        LOG.exception(_LE('Periodic clean up of node cache failed'))
 
 
 def sync_with_ironic():
-    ironic = utils.get_client()
+    ironic = ir_utils.get_client()
     # TODO(yuikotakada): pagination
     ironic_nodes = ironic.node.list(limit=0)
     ironic_node_uuids = {node.uuid for node in ironic_nodes}
     node_cache.delete_nodes_not_in_list(ironic_node_uuids)
-
-
-def init():
-    if utils.get_auth_strategy() != 'noauth':
-        utils.add_auth_middleware(app)
-    else:
-        LOG.warning(_LW('Starting unauthenticated, please check'
-                        ' configuration'))
-
-    if CONF.processing.store_data == 'none':
-        LOG.warning(_LW('Introspection data will not be stored. Change '
-                        '"[processing] store_data" option if this is not the '
-                        'desired behavior'))
-    elif CONF.processing.store_data == 'swift':
-        LOG.info(_LI('Introspection data will be stored in Swift in the '
-                     'container %s'), CONF.swift.container)
-
-    db.init()
-
-    try:
-        hooks = [ext.name for ext in plugins_base.processing_hooks_manager()]
-    except KeyError as exc:
-        # stevedore raises KeyError on missing hook
-        LOG.critical(_LC('Hook %s failed to load or was not found'), str(exc))
-        sys.exit(1)
-
-    LOG.info(_LI('Enabled processing hooks: %s'), hooks)
-
-    if CONF.firewall.manage_firewall:
-        firewall.init()
-        period = CONF.firewall.firewall_update_period
-        utils.spawn_n(periodic_update, period)
-
-    if CONF.timeout > 0:
-        period = CONF.clean_up_period
-        utils.spawn_n(periodic_clean_up, period)
-    else:
-        LOG.warning(_LW('Timeout is disabled in configuration'))
 
 
 def create_ssl_context():
@@ -349,8 +319,8 @@ def create_ssl_context():
 
     if sys.version_info < MIN_VERSION:
         LOG.warning(_LW('Unable to use SSL in this version of Python: '
-                        '%{current}, please ensure your version of Python is '
-                        'greater than %{min} to enable this feature.'),
+                        '%(current)s, please ensure your version of Python is '
+                        'greater than %(min)s to enable this feature.'),
                     {'current': '.'.join(map(str, sys.version_info[:3])),
                      'min': '.'.join(map(str, MIN_VERSION))})
         return
@@ -361,8 +331,8 @@ def create_ssl_context():
             context.load_cert_chain(CONF.ssl_cert_path, CONF.ssl_key_path)
         except IOError as exc:
             LOG.warning(_LW('Failed to load certificate or key from defined '
-                            'locations: %{cert} and %{key}, will continue to '
-                            'run with the default settings: %{exc}'),
+                            'locations: %(cert)s and %(key)s, will continue '
+                            'to run with the default settings: %(exc)s'),
                         {'cert': CONF.ssl_cert_path, 'key': CONF.ssl_key_path,
                          'exc': exc})
         except ssl.SSLError as exc:
@@ -372,32 +342,100 @@ def create_ssl_context():
     return context
 
 
-def main(args=sys.argv[1:]):  # pragma: no cover
-    log.register_options(CONF)
-    CONF(args, project='ironic-inspector')
+class Service(object):
+    _periodics_worker = None
 
-    log.set_defaults(default_log_levels=[
-        'sqlalchemy=WARNING',
-        'keystoneclient=INFO',
-        'iso8601=WARNING',
-        'requests=WARNING',
-        'urllib3.connectionpool=WARNING',
-        'keystonemiddleware=WARNING',
-        'swiftclient=WARNING',
-        'keystoneauth=WARNING',
-        'ironicclient=WARNING'
-    ])
-    log.setup(CONF, 'ironic_inspector')
+    def setup_logging(self, args):
+        log.register_options(CONF)
+        CONF(args, project='ironic-inspector')
 
-    app_kwargs = {'host': CONF.listen_address,
-                  'port': CONF.listen_port}
+        log.set_defaults(default_log_levels=[
+            'sqlalchemy=WARNING',
+            'keystoneclient=INFO',
+            'iso8601=WARNING',
+            'requests=WARNING',
+            'urllib3.connectionpool=WARNING',
+            'keystonemiddleware=WARNING',
+            'swiftclient=WARNING',
+            'keystoneauth=WARNING',
+            'ironicclient=WARNING'
+        ])
+        log.setup(CONF, 'ironic_inspector')
 
-    context = create_ssl_context()
-    if context:
-        app_kwargs['ssl_context'] = context
+        LOG.debug("Configuration:")
+        CONF.log_opt_values(LOG, log.DEBUG)
 
-    init()
-    try:
-        app.run(**app_kwargs)
-    finally:
+    def init(self):
+        if utils.get_auth_strategy() != 'noauth':
+            utils.add_auth_middleware(app)
+        else:
+            LOG.warning(_LW('Starting unauthenticated, please check'
+                            ' configuration'))
+
+        if CONF.processing.store_data == 'none':
+            LOG.warning(_LW('Introspection data will not be stored. Change '
+                            '"[processing] store_data" option if this is not '
+                            'the desired behavior'))
+        elif CONF.processing.store_data == 'swift':
+            LOG.info(_LI('Introspection data will be stored in Swift in the '
+                         'container %s'), CONF.swift.container)
+
+        utils.add_cors_middleware(app)
+
+        db.init()
+
+        try:
+            hooks = [ext.name for ext in
+                     plugins_base.processing_hooks_manager()]
+        except KeyError as exc:
+            # stevedore raises KeyError on missing hook
+            LOG.critical(_LC('Hook %s failed to load or was not found'),
+                         str(exc))
+            sys.exit(1)
+
+        LOG.info(_LI('Enabled processing hooks: %s'), hooks)
+
+        if CONF.firewall.manage_firewall:
+            firewall.init()
+
+        self._periodics_worker = periodics.PeriodicWorker(
+            callables=[(periodic_update, None, None),
+                       (periodic_clean_up, None, None)],
+            executor_factory=periodics.ExistingExecutor(utils.executor()))
+        utils.executor().submit(self._periodics_worker.start)
+
+    def shutdown(self):
+        LOG.debug('Shutting down')
+
         firewall.clean_up()
+
+        if self._periodics_worker is not None:
+            self._periodics_worker.stop()
+            self._periodics_worker.wait()
+            self._periodics_worker = None
+
+        if utils.executor().alive:
+            utils.executor().shutdown(wait=True)
+
+        LOG.info(_LI('Shut down successfully'))
+
+    def run(self, args, application):
+        self.setup_logging(args)
+
+        app_kwargs = {'host': CONF.listen_address,
+                      'port': CONF.listen_port}
+
+        context = create_ssl_context()
+        if context:
+            app_kwargs['ssl_context'] = context
+
+        self.init()
+        try:
+            application.run(**app_kwargs)
+        finally:
+            self.shutdown()
+
+
+def main(args=sys.argv[1:]):  # pragma: no cover
+    service = Service()
+    service.run(args, app)

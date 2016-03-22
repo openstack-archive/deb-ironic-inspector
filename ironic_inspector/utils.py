@@ -13,14 +13,12 @@
 
 import logging as pylog
 import re
-import socket
 
-import eventlet
-from ironicclient import client
-import keystoneclient.v2_0.client as keystone_client
+import futurist
 from keystonemiddleware import auth_token
 from oslo_config import cfg
 from oslo_log import log
+from oslo_middleware import cors as cors_middleware
 import six
 
 from ironic_inspector.common.i18n import _, _LE
@@ -28,31 +26,7 @@ from ironic_inspector import conf  # noqa
 
 CONF = cfg.CONF
 
-# See http://specs.openstack.org/openstack/ironic-specs/specs/kilo/new-ironic-state-machine.html  # noqa
-VALID_STATES = {'enroll', 'manageable', 'inspecting', 'inspectfail'}
-SET_CREDENTIALS_VALID_STATES = {'enroll'}
-
-GREEN_POOL = None
-
-# 1.6 is a Kilo API version, which has all we need and is pretty well tested
-DEFAULT_IRONIC_API_VERSION = '1.6'
-
-
-def get_ipmi_address(node):
-    ipmi_fields = ['ipmi_address'] + CONF.ipmi_address_fields
-    # NOTE(sambetts): IPMI Address is useless to us if bridging is enabled so
-    # just ignore it and return None
-    if node.driver_info.get("ipmi_bridging", "no") != "no":
-        return
-    for name in ipmi_fields:
-        value = node.driver_info.get(name)
-        if value:
-            try:
-                ip = socket.gethostbyname(value)
-                return ip
-            except socket.gaierror:
-                msg = ('Failed to resolve the hostname (%s) for node %s')
-                raise Error(msg % (value, node.uuid), node_info=node)
+_EXECUTOR = None
 
 
 def get_ipmi_address_from_data(introspection_data):
@@ -130,9 +104,9 @@ LOG = getProcessingLogger(__name__)
 class Error(Exception):
     """Inspector exception."""
 
-    def __init__(self, msg, code=400, **kwargs):
+    def __init__(self, msg, code=400, log_level='error', **kwargs):
         super(Error, self).__init__(msg)
-        LOG.error(msg, **kwargs)
+        getattr(LOG, log_level)(msg, **kwargs)
         self.http_code = code
 
 
@@ -140,45 +114,17 @@ class NotFoundInCacheError(Error):
     """Exception when node was not found in cache during processing."""
 
     def __init__(self, msg, code=404):
-        super(NotFoundInCacheError, self).__init__(msg, code)
+        super(NotFoundInCacheError, self).__init__(msg, code,
+                                                   log_level='info')
 
 
-def spawn_n(*args, **kwargs):
-    global GREEN_POOL
-    if not GREEN_POOL:
-        GREEN_POOL = eventlet.greenpool.GreenPool(CONF.max_concurrency)
-    return GREEN_POOL.spawn_n(*args, **kwargs)
-
-
-def get_client(token=None,
-               api_version=DEFAULT_IRONIC_API_VERSION):  # pragma: no cover
-    """Get Ironic client instance."""
-    # NOTE: To support standalone ironic without keystone
-    if CONF.ironic.auth_strategy == 'noauth':
-        args = {'os_auth_token': 'noauth',
-                'ironic_url': CONF.ironic.ironic_url}
-    elif token is None:
-        args = {'os_password': CONF.ironic.os_password,
-                'os_username': CONF.ironic.os_username,
-                'os_auth_url': CONF.ironic.os_auth_url,
-                'os_tenant_name': CONF.ironic.os_tenant_name,
-                'os_service_type': CONF.ironic.os_service_type,
-                'os_endpoint_type': CONF.ironic.os_endpoint_type}
-    else:
-        keystone_creds = {'password': CONF.ironic.os_password,
-                          'username': CONF.ironic.os_username,
-                          'auth_url': CONF.ironic.os_auth_url,
-                          'tenant_name': CONF.ironic.os_tenant_name}
-        keystone = keystone_client.Client(**keystone_creds)
-        ironic_url = keystone.service_catalog.url_for(
-            service_type=CONF.ironic.os_service_type,
-            endpoint_type=CONF.ironic.os_endpoint_type)
-        args = {'os_auth_token': token,
-                'ironic_url': ironic_url}
-    args['os_ironic_api_version'] = api_version
-    args['max_retries'] = CONF.ironic.max_retries
-    args['retry_interval'] = CONF.ironic.retry_interval
-    return client.get_client(1, **args)
+def executor():
+    """Return the current futures executor."""
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        _EXECUTOR = futurist.GreenThreadPoolExecutor(
+            max_workers=CONF.max_concurrency)
+    return _EXECUTOR
 
 
 def add_auth_middleware(app):
@@ -214,6 +160,17 @@ def add_auth_middleware(app):
     app.wsgi_app = auth_token.AuthProtocol(app.wsgi_app, auth_conf)
 
 
+def add_cors_middleware(app):
+    """Create a CORS wrapper
+
+    Attach ironic-inspector-specific defaults that must be included
+    in all CORS responses.
+
+    :param app: application
+    """
+    app.wsgi_app = cors_middleware.CORS(app.wsgi_app, CONF)
+
+
 def check_auth(request):
     """Check authentication on request.
 
@@ -241,32 +198,3 @@ def get_auth_strategy():
     if CONF.authenticate is not None:
         return 'keystone' if CONF.authenticate else 'noauth'
     return CONF.auth_strategy
-
-
-def check_provision_state(node, with_credentials=False):
-    state = node.provision_state.lower()
-    if with_credentials and state not in SET_CREDENTIALS_VALID_STATES:
-        msg = _('Invalid provision state for setting IPMI credentials: '
-                '"%(state)s", valid states are %(valid)s')
-        raise Error(msg % {'state': state,
-                           'valid': list(SET_CREDENTIALS_VALID_STATES)},
-                    node_info=node)
-    elif not with_credentials and state not in VALID_STATES:
-        msg = _('Invalid provision state for introspection: '
-                '"%(state)s", valid states are "%(valid)s"')
-        raise Error(msg % {'state': state, 'valid': list(VALID_STATES)},
-                    node_info=node)
-
-
-def capabilities_to_dict(caps):
-    """Convert the Node's capabilities into a dictionary."""
-    if not caps:
-        return {}
-    return dict([key.split(':', 1) for key in caps.split(',')])
-
-
-def dict_to_capabilities(caps_dict):
-    """Convert a dictionary into a string with the capabilities syntax."""
-    return ','.join(["%s:%s" % (key, value)
-                     for key, value in caps_dict.items()
-                     if value is not None])

@@ -17,11 +17,15 @@ packaged, some of them - under its old name *ironic-discoverd*.
 
 .. _PyPI: https://pypi.python.org/pypi/ironic-inspector
 
+Note for Ubuntu users
+  Please beware :ref:`possible DNS issues <ubuntu-dns>` when installing
+  Ironic-Inspector on Ubuntu.
+
 Version Support Matrix
 ~~~~~~~~~~~~~~~~~~~~~~
 
-**ironic-inspector** currently requires bare metal API version ``1.6`` to be
-provided by Ironic. This version is available starting with Ironic Kilo
+**ironic-inspector** currently requires bare metal API version ``1.11`` to be
+provided by Ironic. This version is available starting with Ironic Liberty
 release.
 
 Here is a mapping between Ironic versions and supported **ironic-inspector**
@@ -121,6 +125,12 @@ As for PXE boot environment, you'll need:
     enable-tftp
     tftp-root={TFTP ROOT, e.g. /tftpboot}
     dhcp-boot=pxelinux.0
+    dhcp-sequential-ip
+
+  .. note::
+    ``dhcp-sequential-ip`` is used because otherwise a lot of nodes booting
+    simultaneously cause conflicts - the same IP address is suggested to
+    several nodes.
 
 * You have to install and configure one of 2 available ramdisks: simple
   bash-based (see `Using simple ramdisk`_) or more complex based on

@@ -11,13 +11,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 import time
 import unittest
 
 import mock
 from oslo_config import cfg
+from oslo_utils import uuidutils
 
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector import db
 from ironic_inspector import node_cache
 from ironic_inspector.test import base as test_base
@@ -29,26 +32,26 @@ CONF = cfg.CONF
 class TestNodeCache(test_base.NodeTest):
     def test_add_node(self):
         # Ensure previous node information is cleared
+        uuid2 = uuidutils.generate_uuid()
         session = db.get_session()
         with session.begin():
             db.Node(uuid=self.node.uuid).save(session)
-            db.Node(uuid='uuid2').save(session)
+            db.Node(uuid=uuid2).save(session)
             db.Attribute(name='mac',
                          value='11:22:11:22:11:22',
                          uuid=self.uuid).save(session)
 
-        res = node_cache.add_node(self.node.uuid, mac=self.macs,
-                                  bmc_address='1.2.3.4', foo=None)
-        self.assertEqual(self.uuid, res.uuid)
-        self.assertTrue(time.time() - 60 < res.started_at < time.time() + 60)
-        self.assertFalse(res._locked)
+        node = node_cache.add_node(self.node.uuid, mac=self.macs,
+                                   bmc_address='1.2.3.4', foo=None)
+        self.assertEqual(self.uuid, node.uuid)
+        self.assertTrue(time.time() - 60 < node.started_at < time.time() + 60)
+        self.assertFalse(node._locked)
 
-        res = (db.model_query(db.Node.uuid,
-               db.Node.started_at).order_by(db.Node.uuid).all())
-        self.assertEqual(['1a1a1a1a-2b2b-3c3c-4d4d-5e5e5e5e5e5e',
-                          'uuid2'], [t.uuid for t in res])
-        self.assertTrue(time.time() - 60 < res[0].started_at <
-                        time.time() + 60)
+        res = set(db.model_query(db.Node.uuid,
+                                 db.Node.started_at).all())
+
+        expected = {(node.uuid, node.started_at), (uuid2, None)}
+        self.assertEqual(expected, res)
 
         res = (db.model_query(db.Attribute.name,
                               db.Attribute.value, db.Attribute.uuid).
@@ -87,7 +90,7 @@ class TestNodeCache(test_base.NodeTest):
     def test_delete_nodes_not_in_list(self, mock__delete_node,
                                       mock__list_node_uuids,
                                       mock__get_lock_ctx):
-        uuid2 = 'uuid2'
+        uuid2 = uuidutils.generate_uuid()
         uuids = {self.uuid}
         mock__list_node_uuids.return_value = {self.uuid, uuid2}
         session = db.get_session()
@@ -99,10 +102,11 @@ class TestNodeCache(test_base.NodeTest):
 
     def test_add_node_duplicate_mac(self):
         session = db.get_session()
+        uuid = uuidutils.generate_uuid()
         with session.begin():
-            db.Node(uuid='another-uuid').save(session)
+            db.Node(uuid=uuid).save(session)
             db.Attribute(name='mac', value='11:22:11:22:11:22',
-                         uuid='another-uuid').save(session)
+                         uuid=uuid).save(session)
         self.assertRaises(utils.Error,
                           node_cache.add_node,
                           self.node.uuid, mac=['11:22:11:22:11:22'])
@@ -121,12 +125,13 @@ class TestNodeCache(test_base.NodeTest):
 
     def test__list_node_uuids(self):
         session = db.get_session()
+        uuid2 = uuidutils.generate_uuid()
         with session.begin():
             db.Node(uuid=self.node.uuid).save(session)
-            db.Node(uuid='uuid2').save(session)
+            db.Node(uuid=uuid2).save(session)
 
         node_uuid_list = node_cache._list_node_uuids()
-        self.assertEqual({self.uuid, 'uuid2'}, node_uuid_list)
+        self.assertEqual({self.uuid, uuid2}, node_uuid_list)
 
     def test_add_attribute(self):
         session = db.get_session()
@@ -417,47 +422,48 @@ class TestNodeInfoOptions(test_base.NodeTest):
         self.assertEqual(data, new.options['name'])
 
 
-@mock.patch.object(utils, 'get_client', autospec=True)
+@mock.patch.object(ir_utils, 'get_client', autospec=True)
 class TestNodeCacheIronicObjects(unittest.TestCase):
     def setUp(self):
         super(TestNodeCacheIronicObjects, self).setUp()
         self.ports = {'mac1': mock.Mock(address='mac1', spec=['address']),
                       'mac2': mock.Mock(address='mac2', spec=['address'])}
+        self.uuid = uuidutils.generate_uuid()
 
     def test_node_provided(self, mock_ironic):
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0,
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0,
                                         node=mock.sentinel.node)
         self.assertIs(mock.sentinel.node, node_info.node())
         self.assertFalse(mock_ironic.called)
 
     def test_node_not_provided(self, mock_ironic):
         mock_ironic.return_value.node.get.return_value = mock.sentinel.node
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0)
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0)
 
         self.assertIs(mock.sentinel.node, node_info.node())
         self.assertIs(node_info.node(), node_info.node())
 
         mock_ironic.assert_called_once_with()
-        mock_ironic.return_value.node.get.assert_called_once_with('uuid')
+        mock_ironic.return_value.node.get.assert_called_once_with(self.uuid)
 
     def test_node_ironic_preset(self, mock_ironic):
         mock_ironic2 = mock.Mock()
         mock_ironic2.node.get.return_value = mock.sentinel.node
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0,
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0,
                                         ironic=mock_ironic2)
         self.assertIs(mock.sentinel.node, node_info.node())
 
         self.assertFalse(mock_ironic.called)
-        mock_ironic2.node.get.assert_called_once_with('uuid')
+        mock_ironic2.node.get.assert_called_once_with(self.uuid)
 
     def test_ports_provided(self, mock_ironic):
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0,
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0,
                                         ports=self.ports)
         self.assertIs(self.ports, node_info.ports())
         self.assertFalse(mock_ironic.called)
 
     def test_ports_provided_list(self, mock_ironic):
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0,
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0,
                                         ports=list(self.ports.values()))
         self.assertEqual(self.ports, node_info.ports())
         self.assertFalse(mock_ironic.called)
@@ -465,26 +471,26 @@ class TestNodeCacheIronicObjects(unittest.TestCase):
     def test_ports_not_provided(self, mock_ironic):
         mock_ironic.return_value.node.list_ports.return_value = list(
             self.ports.values())
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0)
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0)
 
         self.assertEqual(self.ports, node_info.ports())
         self.assertIs(node_info.ports(), node_info.ports())
 
         mock_ironic.assert_called_once_with()
         mock_ironic.return_value.node.list_ports.assert_called_once_with(
-            'uuid', limit=0)
+            self.uuid, limit=0)
 
     def test_ports_ironic_preset(self, mock_ironic):
         mock_ironic2 = mock.Mock()
         mock_ironic2.node.list_ports.return_value = list(
             self.ports.values())
-        node_info = node_cache.NodeInfo(uuid='uuid', started_at=0,
+        node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0,
                                         ironic=mock_ironic2)
         self.assertEqual(self.ports, node_info.ports())
 
         self.assertFalse(mock_ironic.called)
         mock_ironic2.node.list_ports.assert_called_once_with(
-            'uuid', limit=0)
+            self.uuid, limit=0)
 
 
 class TestUpdate(test_base.NodeTest):
@@ -502,9 +508,33 @@ class TestUpdate(test_base.NodeTest):
     def test_patch(self):
         self.ironic.node.update.return_value = mock.sentinel.node
 
-        self.node_info.patch(['patch'])
+        self.node_info.patch([{'patch': 'patch'}])
 
-        self.ironic.node.update.assert_called_once_with(self.uuid, ['patch'])
+        self.ironic.node.update.assert_called_once_with(self.uuid,
+                                                        [{'patch': 'patch'}])
+        self.assertIs(mock.sentinel.node, self.node_info.node())
+
+    def test_patch_path_wo_leading_slash(self):
+        self.ironic.node.update.return_value = mock.sentinel.node
+
+        patch = [{'op': 'add', 'path': 'driver_info/test', 'value': 42}]
+        expected_patch = copy.deepcopy(patch)
+        expected_patch[0]['path'] = '/' + 'driver_info/test'
+
+        self.node_info.patch(patch)
+
+        self.ironic.node.update.assert_called_once_with(self.uuid,
+                                                        expected_patch)
+        self.assertIs(mock.sentinel.node, self.node_info.node())
+
+    def test_patch_path_with_leading_slash(self):
+        self.ironic.node.update.return_value = mock.sentinel.node
+
+        patch = [{'op': 'add', 'path': '/driver_info/test', 'value': 42}]
+
+        self.node_info.patch(patch)
+
+        self.ironic.node.update.assert_called_once_with(self.uuid, patch)
         self.assertIs(mock.sentinel.node, self.node_info.node())
 
     def test_update_properties(self):
@@ -524,7 +554,7 @@ class TestUpdate(test_base.NodeTest):
 
         self.ironic.node.update.assert_called_once_with(self.uuid, mock.ANY)
         patch = self.ironic.node.update.call_args[0][1]
-        new_caps = utils.capabilities_to_dict(patch[0]['value'])
+        new_caps = ir_utils.capabilities_to_dict(patch[0]['value'])
         self.assertEqual({'foo': 'bar', 'x': '1', 'y': '2'}, new_caps)
 
     def test_replace_field(self):
@@ -646,3 +676,44 @@ class TestLock(test_base.NodeTest):
         self.assertTrue(node_info._locked)
         get_lock_mock.return_value.acquire.assert_called_with(False)
         self.assertEqual(2, get_lock_mock.return_value.acquire.call_count)
+
+
+@mock.patch.object(node_cache, 'add_node', autospec=True)
+@mock.patch.object(ir_utils, 'get_client', autospec=True)
+class TestNodeCreate(test_base.NodeTest):
+    def setUp(self):
+        super(TestNodeCreate, self).setUp()
+        self.mock_client = mock.Mock()
+
+    def test_default_create(self, mock_get_client, mock_add_node):
+        mock_get_client.return_value = self.mock_client
+        self.mock_client.node.create.return_value = self.node
+
+        node_cache.create_node('fake')
+
+        self.mock_client.node.create.assert_called_once_with(driver='fake')
+        mock_add_node.assert_called_once_with(self.node.uuid,
+                                              ironic=self.mock_client)
+
+    def test_create_with_args(self, mock_get_client, mock_add_node):
+        mock_get_client.return_value = self.mock_client
+        self.mock_client.node.create.return_value = self.node
+
+        node_cache.create_node('agent_ipmitool', ironic=self.mock_client)
+
+        self.assertFalse(mock_get_client.called)
+        self.mock_client.node.create.assert_called_once_with(
+            driver='agent_ipmitool')
+        mock_add_node.assert_called_once_with(self.node.uuid,
+                                              ironic=self.mock_client)
+
+    def test_create_client_error(self, mock_get_client, mock_add_node):
+        mock_get_client.return_value = self.mock_client
+        self.mock_client.node.create.side_effect = (
+            node_cache.exceptions.InvalidAttribute)
+
+        node_cache.create_node('fake')
+
+        mock_get_client.assert_called_once_with()
+        self.mock_client.node.create.assert_called_once_with(driver='fake')
+        self.assertFalse(mock_add_node.called)

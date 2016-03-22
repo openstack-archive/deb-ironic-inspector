@@ -14,9 +14,11 @@
 """Standard plugins for rules API."""
 
 import operator
+import re
 
 import netaddr
 
+from ironic_inspector.common.i18n import _
 from ironic_inspector.plugins import base
 from ironic_inspector import utils
 
@@ -65,6 +67,13 @@ class NeCondition(SimpleCondition):
     op = operator.ne
 
 
+class EmptyCondition(base.RuleConditionPlugin):
+    REQUIRED_PARAMS = set()
+
+    def check(self, node_info, field, params, **kwargs):
+        return field in ('', None, [], {})
+
+
 class NetCondition(base.RuleConditionPlugin):
     def validate(self, params, **kwargs):
         super(NetCondition, self).validate(params, **kwargs)
@@ -79,6 +88,27 @@ class NetCondition(base.RuleConditionPlugin):
         return netaddr.IPAddress(field) in network
 
 
+class ReCondition(base.RuleConditionPlugin):
+    def validate(self, params, **kwargs):
+        try:
+            re.compile(params['value'])
+        except re.error as exc:
+            raise ValueError(_('invalid regular expression: %s') % exc)
+
+
+class MatchesCondition(ReCondition):
+    def check(self, node_info, field, params, **kwargs):
+        regexp = params['value']
+        if regexp[-1] != '$':
+            regexp += '$'
+        return re.match(regexp, str(field)) is not None
+
+
+class ContainsCondition(ReCondition):
+    def check(self, node_info, field, params, **kwargs):
+        return re.search(params['value'], str(field)) is not None
+
+
 class FailAction(base.RuleActionPlugin):
     REQUIRED_PARAMS = {'message'}
 
@@ -90,31 +120,22 @@ class SetAttributeAction(base.RuleActionPlugin):
     REQUIRED_PARAMS = {'path', 'value'}
     # TODO(dtantsur): proper validation of path
 
+    FORMATTED_PARAMS = ['value']
+
     def apply(self, node_info, params, **kwargs):
         node_info.patch([{'op': 'add', 'path': params['path'],
                           'value': params['value']}])
-
-    def rollback(self, node_info, params, **kwargs):
-        try:
-            node_info.get_by_path(params['path'])
-        except KeyError:
-            LOG.debug('Field %s was not set, no need for rollback',
-                      params['path'], node_info=node_info)
-            return
-
-        node_info.patch([{'op': 'remove', 'path': params['path']}])
 
 
 class SetCapabilityAction(base.RuleActionPlugin):
     REQUIRED_PARAMS = {'name'}
     OPTIONAL_PARAMS = {'value'}
 
+    FORMATTED_PARAMS = ['value']
+
     def apply(self, node_info, params, **kwargs):
         node_info.update_capabilities(
             **{params['name']: params.get('value')})
-
-    def rollback(self, node_info, params, **kwargs):
-        node_info.update_capabilities(**{params['name']: None})
 
 
 class ExtendAttributeAction(base.RuleActionPlugin):
@@ -122,17 +143,13 @@ class ExtendAttributeAction(base.RuleActionPlugin):
     OPTIONAL_PARAMS = {'unique'}
     # TODO(dtantsur): proper validation of path
 
+    FORMATTED_PARAMS = ['value']
+
     def apply(self, node_info, params, **kwargs):
         def _replace(values):
             value = params['value']
             if not params.get('unique') or value not in values:
                 values.append(value)
             return values
-
-        node_info.replace_field(params['path'], _replace, default=[])
-
-    def rollback(self, node_info, params, **kwargs):
-        def _replace(values):
-            return [v for v in values if v != params['value']]
 
         node_info.replace_field(params['path'], _replace, default=[])

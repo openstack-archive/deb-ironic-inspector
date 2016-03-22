@@ -95,13 +95,28 @@ ramdisk or to boot them, make sure that:
 #. ``pxelinux.cfg/default`` within TFTP root contains correct reference to the
    kernel and ramdisk.
 
+.. note::
+    If using iPXE instead of PXE, check the HTTP server logs and the iPXE
+    configuration instead.
+
 Troubleshooting ramdisk run
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Connect to the remote console as described in `Troubleshooting PXE boot`_ to
-see what is going on with the ramdisk. The ramdisk drops into emergency shell
-on failure, which you can use to look around. There should be file called
-``logs`` with the current ramdisk logs.
+First, check if the ramdisk logs were stored locally as described in the
+`Troubleshooting data processing`_ section. If not, ensure that the ramdisk
+actually booted as described in the `Troubleshooting PXE boot`_ section.
+
+Finally, you can try connecting to the IPA ramdisk. If you have any remote
+console access to the machine, you can check the logs as they appear on the
+screen. Otherwise, you can rebuild the IPA image with your SSH key to be able
+to log into it. Use the `dynamic-login`_ or `devuser`_ element for a DIB-based
+build or put an authorized_keys file in ``/usr/share/oem/`` for a CoreOS-based
+one.
+
+.. _devuser: http://docs.openstack.org/developer/diskimage-builder/elements/devuser/README.html
+.. _dynamic-login: http://docs.openstack.org/developer/diskimage-builder/elements/dynamic-login/README.html
+
+.. _ubuntu-dns:
 
 Troubleshooting DNS issues on Ubuntu
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -111,3 +126,8 @@ before calling out to an external DNS server. When DNSmasq is installed and
 configured for use with ironic-inspector, it can cause problems by interfering
 with the local DNS cache. To fix this issue ensure that ``/etc/resolve.conf``
 points to your external DNS servers and not to ``127.0.0.1``.
+
+On Ubuntu 14.04 this can be done by editing your
+``/etc/resolvconf/resolv.conf.d/head`` and adding your nameservers there.
+This will ensure they will come up first when ``/etc/resolv.conf``
+is regenerated.

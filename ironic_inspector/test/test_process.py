@@ -19,7 +19,9 @@ import eventlet
 from ironicclient import exceptions
 import mock
 from oslo_config import cfg
+from oslo_utils import uuidutils
 
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector import firewall
 from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
@@ -49,16 +51,14 @@ class BaseTest(test_base.NodeTest):
             },
             'boot_interface': '01-' + self.pxe_mac.replace(':', '-'),
         }
-        self.all_ports = [
-            mock.Mock(uuid='port_uuid%d' % i, address=mac)
-            for i, mac in enumerate(self.macs)
-        ]
+        self.all_ports = [mock.Mock(uuid=uuidutils.generate_uuid(),
+                                    address=mac) for mac in self.macs]
         self.ports = [self.all_ports[1]]
 
 
 @mock.patch.object(process, '_process_node', autospec=True)
 @mock.patch.object(node_cache, 'find_node', autospec=True)
-@mock.patch.object(utils, 'get_client', autospec=True)
+@mock.patch.object(ir_utils, 'get_client', autospec=True)
 class TestProcess(BaseTest):
     def setUp(self):
         super(TestProcess, self).setUp()
@@ -126,6 +126,18 @@ class TestProcess(BaseTest):
         cli.node.get.assert_called_once_with(self.uuid)
         self.assertFalse(process_mock.called)
         pop_mock.return_value.finished.assert_called_once_with(error=mock.ANY)
+
+    @prepare_mocks
+    def test_already_finished(self, cli, pop_mock, process_mock):
+        old_finished_at = pop_mock.return_value.finished_at
+        pop_mock.return_value.finished_at = time.time()
+        try:
+            self.assertRaisesRegexp(utils.Error, 'already finished',
+                                    process.process, self.data)
+            self.assertFalse(process_mock.called)
+            self.assertFalse(pop_mock.return_value.finished.called)
+        finally:
+            pop_mock.return_value.finished_at = old_finished_at
 
     @prepare_mocks
     def test_expected_exception(self, cli, pop_mock, process_mock):
@@ -228,8 +240,6 @@ class TestProcess(BaseTest):
             hook_mock.assert_called_once_with(self.data)
 
 
-@mock.patch.object(utils, 'spawn_n',
-                   lambda f, *a: f(*a) and None)
 @mock.patch.object(eventlet.greenthread, 'sleep', lambda _: None)
 @mock.patch.object(example_plugin.ExampleProcessingHook, 'before_update')
 @mock.patch.object(firewall, 'update_filters', autospec=True)
@@ -267,7 +277,7 @@ class TestProcessNode(BaseTest):
         self.cli.node.update.return_value = self.node
         self.cli.node.list_ports.return_value = []
 
-    @mock.patch.object(utils, 'get_client')
+    @mock.patch.object(ir_utils, 'get_client')
     def call(self, mock_cli):
         mock_cli.return_value = self.cli
         return process._process_node(self.node, self.data, self.node_info)
@@ -300,9 +310,7 @@ class TestProcessNode(BaseTest):
         self.cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
         self.assertFalse(self.cli.node.validate.called)
 
-        post_hook_mock.assert_called_once_with(self.data, self.node_info,
-                                               node_patches=mock.ANY,
-                                               ports_patches=mock.ANY)
+        post_hook_mock.assert_called_once_with(self.data, self.node_info)
         finished_mock.assert_called_once_with(mock.ANY)
 
     def test_overwrite_disabled(self, filters_mock, post_hook_mock):
@@ -327,24 +335,6 @@ class TestProcessNode(BaseTest):
         self.cli.port.create.assert_any_call(node_uuid=self.uuid,
                                              address=self.macs[1])
         self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
-
-    def test_hook_patches(self, filters_mock, post_hook_mock):
-        expected_node_patches = [{'path': 'foo', 'op': 'bar'}]
-        expected_port_patch = [{'path': 'foo', 'op': 'baz'}]
-
-        def fake_hook(data, node_info, node_patches, ports_patches):
-            node_patches.extend(expected_node_patches)
-            ports_patches.setdefault(self.macs[1],
-                                     []).extend(expected_port_patch)
-
-        post_hook_mock.side_effect = fake_hook
-
-        self.call()
-
-        self.assertCalledWithPatch(self.patch_props + expected_node_patches,
-                                   self.cli.node.update)
-        self.assertCalledWithPatch(expected_port_patch,
-                                   self.cli.port.update)
 
     def test_set_ipmi_credentials(self, filters_mock, post_hook_mock):
         self.node_info.set_option('new_ipmi_credentials', self.new_creds)
@@ -379,8 +369,7 @@ class TestProcessNode(BaseTest):
         self.node_info.set_option('new_ipmi_credentials', self.new_creds)
         self.cli.node.get_boot_device.side_effect = RuntimeError('boom')
 
-        self.assertRaisesRegexp(utils.Error, 'Failed to validate',
-                                self.call)
+        self.call()
 
         self.cli.node.update.assert_any_call(self.uuid, self.patch_credentials)
         self.assertEqual(2, self.cli.node.update.call_count)
@@ -397,8 +386,7 @@ class TestProcessNode(BaseTest):
                               post_hook_mock):
         self.cli.node.set_power_state.side_effect = RuntimeError('boom')
 
-        self.assertRaisesRegexp(utils.Error, 'Failed to power off',
-                                self.call)
+        self.call()
 
         self.cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
         self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
@@ -407,16 +395,46 @@ class TestProcessNode(BaseTest):
             error='Failed to power off node %s, check it\'s power management'
             ' configuration: boom' % self.uuid)
 
+    @mock.patch.object(node_cache.NodeInfo, 'finished', autospec=True)
+    def test_power_off_enroll_state(self, finished_mock, filters_mock,
+                                    post_hook_mock):
+        self.node.provision_state = 'enroll'
+        self.node_info.node = mock.Mock(return_value=self.node)
+
+        self.call()
+
+        self.assertTrue(post_hook_mock.called)
+        self.assertTrue(self.cli.node.set_power_state.called)
+        finished_mock.assert_called_once_with(self.node_info)
+
     @mock.patch.object(process.swift, 'SwiftAPI', autospec=True)
     def test_store_data(self, swift_mock, filters_mock, post_hook_mock):
         CONF.set_override('store_data', 'swift', 'processing')
         swift_conn = swift_mock.return_value
         name = 'inspector_data-%s' % self.uuid
-        expected = json.dumps(self.data)
+        expected = self.data
 
         self.call()
 
-        swift_conn.create_object.assert_called_once_with(name, expected)
+        swift_conn.create_object.assert_called_once_with(name, mock.ANY)
+        self.assertEqual(expected,
+                         json.loads(swift_conn.create_object.call_args[0][1]))
+        self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
+
+    @mock.patch.object(process.swift, 'SwiftAPI', autospec=True)
+    def test_store_data_no_logs(self, swift_mock, filters_mock,
+                                post_hook_mock):
+        CONF.set_override('store_data', 'swift', 'processing')
+        swift_conn = swift_mock.return_value
+        name = 'inspector_data-%s' % self.uuid
+        expected = self.data.copy()
+        self.data['logs'] = 'something'
+
+        self.call()
+
+        swift_conn.create_object.assert_called_once_with(name, mock.ANY)
+        self.assertEqual(expected,
+                         json.loads(swift_conn.create_object.call_args[0][1]))
         self.assertCalledWithPatch(self.patch_props, self.cli.node.update)
 
     @mock.patch.object(process.swift, 'SwiftAPI', autospec=True)
@@ -432,9 +450,11 @@ class TestProcessNode(BaseTest):
              'value': name,
              'op': 'add'}
         )
-        expected = json.dumps(self.data)
+        expected = self.data
 
         self.call()
 
-        swift_conn.create_object.assert_called_once_with(name, expected)
+        swift_conn.create_object.assert_called_once_with(name, mock.ANY)
+        self.assertEqual(expected,
+                         json.loads(swift_conn.create_object.call_args[0][1]))
         self.assertCalledWithPatch(self.patch_props, self.cli.node.update)

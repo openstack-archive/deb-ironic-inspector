@@ -25,7 +25,8 @@ from oslo_utils import excutils
 from sqlalchemy import text
 
 from ironic_inspector import db
-from ironic_inspector.common.i18n import _, _LE, _LW
+from ironic_inspector.common.i18n import _, _LE, _LW, _LI
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector import utils
 
 CONF = cfg.CONF
@@ -139,7 +140,7 @@ class NodeInfo(object):
     def ironic(self):
         """Ironic client instance."""
         if self._ironic is None:
-            self._ironic = utils.get_client()
+            self._ironic = ir_utils.get_client()
         return self._ironic
 
     def set_option(self, name, value):
@@ -264,6 +265,12 @@ class NodeInfo(object):
         :param patches: JSON patches to apply
         :raises: ironicclient exceptions
         """
+        # NOTE(aarefiev): support path w/o ahead forward slash
+        # as Ironic cli does
+        for patch in patches:
+            if patch.get('path') and not patch['path'].startswith('/'):
+                patch['path'] = '/' + patch['path']
+
         LOG.debug('Updating node with patches %s', patches, node_info=self)
         self._node = self.ironic.node.update(self.uuid, patches)
 
@@ -297,11 +304,11 @@ class NodeInfo(object):
 
         :param props: capabilities to update
         """
-        existing = utils.capabilities_to_dict(
+        existing = ir_utils.capabilities_to_dict(
             self.node().properties.get('capabilities'))
         existing.update(caps)
         self.update_properties(
-            capabilities=utils.dict_to_capabilities(existing))
+            capabilities=ir_utils.dict_to_capabilities(existing))
 
     def delete_port(self, port):
         """Delete port.
@@ -408,6 +415,13 @@ def _delete_node(uuid, session=None):
         for model in (db.Attribute, db.Option, db.Node):
             db.model_query(model,
                            session=session).filter_by(uuid=uuid).delete()
+
+
+def introspection_active():
+    """Check if introspection is active for at least one node."""
+    # FIXME(dtantsur): is there a better way to express it?
+    return (db.model_query(db.Node.uuid).filter_by(finished_at=None).first()
+            is not None)
 
 
 def active_macs():
@@ -562,3 +576,26 @@ def clean_up():
                 node_info.release_lock()
 
     return uuids
+
+
+def create_node(driver,  ironic=None, **attributes):
+    """Create ironic node and cache it.
+
+    * Create new node in ironic.
+    * Cache it in inspector.
+
+    :param driver: driver for Ironic node.
+    :param ironic: ronic client instance.
+    :param attributes: dict, additional keyword arguments to pass
+                             to the ironic client on node creation.
+    :return: NodeInfo, or None in case error happened.
+    """
+    if ironic is None:
+        ironic = ir_utils.get_client()
+    try:
+        node = ironic.node.create(driver=driver, **attributes)
+    except exceptions.InvalidAttribute as e:
+        LOG.error(_LE('Failed to create new node: %s'), e)
+    else:
+        LOG.info(_LI('Node %s was created successfully'), node.uuid)
+        return add_node(node.uuid, ironic=ironic)

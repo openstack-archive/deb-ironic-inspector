@@ -19,6 +19,8 @@ import unittest
 import mock
 from oslo_utils import uuidutils
 
+from ironic_inspector.common import ironic as ir_utils
+from ironic_inspector import conf
 from ironic_inspector import db
 from ironic_inspector import firewall
 from ironic_inspector import introspect
@@ -104,7 +106,7 @@ class TestApiIntrospect(BaseAPITest):
 
     @mock.patch.object(introspect, 'introspect', autospec=True)
     def test_introspect_invalid_uuid(self, introspect_mock):
-        uuid_dummy = 'uuid1'
+        uuid_dummy = 'invalid-uuid'
         res = self.app.post('/v1/introspection/%s' % uuid_dummy)
         self.assertEqual(400, res.status_code)
 
@@ -133,6 +135,50 @@ class TestApiContinue(BaseAPITest):
         self.assertEqual('Invalid data: expected a JSON object, got int',
                          _get_error(res))
         self.assertFalse(process_mock.called)
+
+
+@mock.patch.object(introspect, 'abort', autospec=True)
+class TestApiAbort(BaseAPITest):
+    def test_ok(self, abort_mock):
+        abort_mock.return_value = '', 202
+
+        res = self.app.post('/v1/introspection/%s/abort' % self.uuid,
+                            headers={'X-Auth-Token': 'token'})
+
+        abort_mock.assert_called_once_with(self.uuid, token='token')
+        self.assertEqual(202, res.status_code)
+        self.assertEqual(b'', res.data)
+
+    def test_no_authentication(self, abort_mock):
+        abort_mock.return_value = b'', 202
+
+        res = self.app.post('/v1/introspection/%s/abort' % self.uuid)
+
+        abort_mock.assert_called_once_with(self.uuid, token=None)
+        self.assertEqual(202, res.status_code)
+        self.assertEqual(b'', res.data)
+
+    def test_node_not_found(self, abort_mock):
+        exc = utils.Error("Not Found.", code=404)
+        abort_mock.side_effect = iter([exc])
+
+        res = self.app.post('/v1/introspection/%s/abort' % self.uuid)
+
+        abort_mock.assert_called_once_with(self.uuid, token=None)
+        self.assertEqual(404, res.status_code)
+        data = json.loads(str(res.data.decode()))
+        self.assertEqual(str(exc), data['error']['message'])
+
+    def test_abort_failed(self, abort_mock):
+        exc = utils.Error("Locked.", code=409)
+        abort_mock.side_effect = iter([exc])
+
+        res = self.app.post('/v1/introspection/%s/abort' % self.uuid)
+
+        abort_mock.assert_called_once_with(self.uuid, token=None)
+        self.assertEqual(409, res.status_code)
+        data = json.loads(res.data.decode())
+        self.assertEqual(str(exc), data['error']['message'])
 
 
 class TestApiGetStatus(BaseAPITest):
@@ -307,9 +353,9 @@ class TestApiMisc(BaseAPITest):
 class TestApiVersions(BaseAPITest):
     def _check_version_present(self, res):
         self.assertEqual('%d.%d' % main.MINIMUM_API_VERSION,
-                         res.headers.get(main._MIN_VERSION_HEADER))
+                         res.headers.get(conf.MIN_VERSION_HEADER))
         self.assertEqual('%d.%d' % main.CURRENT_API_VERSION,
-                         res.headers.get(main._MAX_VERSION_HEADER))
+                         res.headers.get(conf.MAX_VERSION_HEADER))
 
     def test_root_endpoint(self):
         res = self.app.get("/")
@@ -375,14 +421,14 @@ class TestApiVersions(BaseAPITest):
             self.app.post('/v1/introspection/foobar'))
 
     def test_request_correct_version(self):
-        headers = {main._VERSION_HEADER:
+        headers = {conf.VERSION_HEADER:
                    main._format_version(main.CURRENT_API_VERSION)}
         self._check_version_present(self.app.get('/', headers=headers))
 
     def test_request_unsupported_version(self):
         bad_version = (main.CURRENT_API_VERSION[0],
                        main.CURRENT_API_VERSION[1] + 1)
-        headers = {main._VERSION_HEADER:
+        headers = {conf.VERSION_HEADER:
                    main._format_version(bad_version)}
         res = self.app.get('/', headers=headers)
         self._check_version_present(res)
@@ -412,88 +458,70 @@ class TestPlugins(unittest.TestCase):
                       plugins_base.processing_hooks_manager())
 
 
-@mock.patch.object(utils, 'spawn_n')
 @mock.patch.object(firewall, 'init')
 @mock.patch.object(utils, 'add_auth_middleware')
-@mock.patch.object(utils, 'get_client')
+@mock.patch.object(ir_utils, 'get_client')
 @mock.patch.object(db, 'init')
 class TestInit(test_base.BaseTest):
+    def setUp(self):
+        super(TestInit, self).setUp()
+        # Tests default to a synchronous executor which can't be used here
+        utils._EXECUTOR = None
+        self.service = main.Service()
+
+    @mock.patch.object(firewall, 'clean_up', lambda: None)
+    def tearDown(self):
+        self.service.shutdown()
+
     def test_ok(self, mock_node_cache, mock_get_client, mock_auth,
-                mock_firewall, mock_spawn_n):
+                mock_firewall):
         CONF.set_override('auth_strategy', 'keystone')
-        main.init()
+        self.service.init()
         mock_auth.assert_called_once_with(main.app)
         mock_node_cache.assert_called_once_with()
         mock_firewall.assert_called_once_with()
 
-        spawn_n_expected_args = [
-            (main.periodic_update, CONF.firewall.firewall_update_period),
-            (main.periodic_clean_up, CONF.clean_up_period)]
-        spawn_n_call_args_list = mock_spawn_n.call_args_list
-
-        for (args, call) in zip(spawn_n_expected_args,
-                                spawn_n_call_args_list):
-            self.assertEqual(args, call[0])
-
     def test_init_without_authenticate(self, mock_node_cache, mock_get_client,
-                                       mock_auth, mock_firewall, mock_spawn_n):
+                                       mock_auth, mock_firewall):
         CONF.set_override('auth_strategy', 'noauth')
-        main.init()
+        self.service.init()
         self.assertFalse(mock_auth.called)
 
     @mock.patch.object(main.LOG, 'warning')
     def test_init_with_no_data_storage(self, mock_log, mock_node_cache,
                                        mock_get_client, mock_auth,
-                                       mock_firewall, mock_spawn_n):
+                                       mock_firewall):
         msg = ('Introspection data will not be stored. Change '
                '"[processing] store_data" option if this is not the '
                'desired behavior')
-        main.init()
+        self.service.init()
         mock_log.assert_called_once_with(msg)
 
     @mock.patch.object(main.LOG, 'info')
     def test_init_with_swift_storage(self, mock_log, mock_node_cache,
                                      mock_get_client, mock_auth,
-                                     mock_firewall, mock_spawn_n):
+                                     mock_firewall):
         CONF.set_override('store_data', 'swift', 'processing')
         msg = mock.call('Introspection data will be stored in Swift in the '
                         'container %s', CONF.swift.container)
-        main.init()
+        self.service.init()
         self.assertIn(msg, mock_log.call_args_list)
 
     def test_init_without_manage_firewall(self, mock_node_cache,
                                           mock_get_client, mock_auth,
-                                          mock_firewall, mock_spawn_n):
+                                          mock_firewall):
         CONF.set_override('manage_firewall', False, 'firewall')
-        main.init()
+        self.service.init()
         self.assertFalse(mock_firewall.called)
-        spawn_n_expected_args = [
-            (main.periodic_clean_up, CONF.clean_up_period)]
-        spawn_n_call_args_list = mock_spawn_n.call_args_list
-        for (args, call) in zip(spawn_n_expected_args,
-                                spawn_n_call_args_list):
-            self.assertEqual(args, call[0])
-
-    def test_init_with_timeout_0(self, mock_node_cache, mock_get_client,
-                                 mock_auth, mock_firewall, mock_spawn_n):
-        CONF.set_override('timeout', 0)
-        main.init()
-        spawn_n_expected_args = [
-            (main.periodic_update, CONF.firewall.firewall_update_period)]
-        spawn_n_call_args_list = mock_spawn_n.call_args_list
-
-        for (args, call) in zip(spawn_n_expected_args,
-                                spawn_n_call_args_list):
-            self.assertEqual(args, call[0])
 
     @mock.patch.object(main.LOG, 'critical')
     def test_init_failed_processing_hook(self, mock_log, mock_node_cache,
                                          mock_get_client, mock_auth,
-                                         mock_firewall, mock_spawn_n):
+                                         mock_firewall):
         CONF.set_override('processing_hooks', 'foo!', 'processing')
         plugins_base._HOOKS_MGR = None
 
-        self.assertRaises(SystemExit, main.init)
+        self.assertRaises(SystemExit, self.service.init)
         mock_log.assert_called_once_with(mock.ANY, "'foo!'")
 
 

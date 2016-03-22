@@ -22,6 +22,7 @@ from ironicclient import exceptions
 from oslo_config import cfg
 
 from ironic_inspector.common.i18n import _, _LI, _LW
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector import firewall
 from ironic_inspector import node_cache
 from ironic_inspector import utils
@@ -71,7 +72,7 @@ def introspect(uuid, new_ipmi_credentials=None, token=None):
     :param token: authentication token
     :raises: Error
     """
-    ironic = utils.get_client(token)
+    ironic = ir_utils.get_client(token)
 
     try:
         node = ironic.node.get(uuid)
@@ -81,7 +82,7 @@ def introspect(uuid, new_ipmi_credentials=None, token=None):
         raise utils.Error(_("Cannot get node %(node)s: %(exc)s") %
                           {'node': uuid, 'exc': exc})
 
-    utils.check_provision_state(node, with_credentials=new_ipmi_credentials)
+    ir_utils.check_provision_state(node, with_credentials=new_ipmi_credentials)
 
     if new_ipmi_credentials:
         new_ipmi_credentials = (
@@ -93,14 +94,15 @@ def introspect(uuid, new_ipmi_credentials=None, token=None):
             raise utils.Error(msg % validation.power['reason'],
                               node_info=node)
 
+    bmc_address = ir_utils.get_ipmi_address(node)
     node_info = node_cache.add_node(node.uuid,
-                                    bmc_address=utils.get_ipmi_address(node),
+                                    bmc_address=bmc_address,
                                     ironic=ironic)
     node_info.set_option('new_ipmi_credentials', new_ipmi_credentials)
 
-    def _handle_exceptions():
+    def _handle_exceptions(fut):
         try:
-            _background_introspect(ironic, node_info)
+            fut.result()
         except utils.Error as exc:
             # Logging has already happened in Error.__init__
             node_info.finished(error=str(exc))
@@ -109,7 +111,8 @@ def introspect(uuid, new_ipmi_credentials=None, token=None):
             LOG.exception(msg, node_info=node_info)
             node_info.finished(error=msg)
 
-    utils.spawn_n(_handle_exceptions)
+    future = utils.executor().submit(_background_introspect, ironic, node_info)
+    future.add_done_callback(_handle_exceptions)
 
 
 def _background_introspect(ironic, node_info):
@@ -174,3 +177,54 @@ def _background_introspect_locked(ironic, node_info):
         LOG.info(_LI('Introspection environment is ready, manual power on is '
                      'required within %d seconds'), CONF.timeout,
                  node_info=node_info)
+
+
+def abort(uuid, token=None):
+    """Abort running introspection.
+
+    :param uuid: node uuid
+    :param token: authentication token
+    :raises: Error
+    """
+    LOG.debug('Aborting introspection for node %s', uuid)
+    ironic = ir_utils.get_client(token)
+    node_info = node_cache.get_node(uuid, ironic=ironic, locked=False)
+
+    # check pending operations
+    locked = node_info.acquire_lock(blocking=False)
+    if not locked:
+        # Node busy --- cannot abort atm
+        raise utils.Error(_('Node is locked, please, retry later'),
+                          node_info=node_info, code=409)
+
+    utils.executor().submit(_abort, node_info, ironic)
+
+
+def _abort(node_info, ironic):
+    # runs in background
+    if node_info.finished_at is not None:
+        # introspection already finished; nothing to do
+        LOG.info(_LI('Cannot abort introspection as it is already '
+                     'finished'), node_info=node_info)
+        node_info.release_lock()
+        return
+
+    # block this node from PXE Booting the introspection image
+    try:
+        firewall.update_filters(ironic)
+    except Exception as exc:
+        # Note(mkovacik): this will be retried in firewall update
+        # periodic task; we continue aborting
+        LOG.warning(_LW('Failed to update firewall filters: %s'), exc,
+                    node_info=node_info)
+
+    # finish the introspection
+    LOG.debug('Forcing power-off', node_info=node_info)
+    try:
+        ironic.node.set_power_state(node_info.uuid, 'off')
+    except Exception as exc:
+        LOG.warning(_LW('Failed to power off node: %s'), exc,
+                    node_info=node_info)
+
+    node_info.finished(error=_('Canceled by operator'))
+    LOG.info(_LI('Introspection aborted'), node_info=node_info)

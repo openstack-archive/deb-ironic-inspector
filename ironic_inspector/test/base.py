@@ -11,12 +11,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
+import fixtures
+import futurist
 import mock
 from oslo_concurrency import lockutils
 from oslo_config import cfg
+from oslo_config import fixture as config_fixture
 from oslo_log import log
+from oslo_utils import uuidutils
 
 from ironic_inspector.common import i18n
 # Import configuration options
@@ -24,34 +27,19 @@ from ironic_inspector import conf  # noqa
 from ironic_inspector import db
 from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
+from ironic_inspector import utils
 
 CONF = cfg.CONF
 
 
-def init_test_conf():
-    try:
-        # Functional tests
-        CONF.reload_config_files()
-        # Unit tests
-    except Exception:
-        CONF.reset()
-    for group in ('firewall', 'processing', 'ironic', 'discoverd'):
-        CONF.register_group(cfg.OptGroup(group))
-    try:
-        # Functional tests
-        log.register_options(CONF)
-    except Exception:
-        # Unit tests
-        pass
-    CONF.set_default('connection', "sqlite:///", group='database')
-    CONF.set_default('slave_connection', False, group='database')
-    CONF.set_default('max_retries', 10, group='database')
+class BaseTest(fixtures.TestWithFixtures):
 
+    IS_FUNCTIONAL = False
 
-class BaseTest(unittest.TestCase):
     def setUp(self):
         super(BaseTest, self).setUp()
-        init_test_conf()
+        if not self.IS_FUNCTIONAL:
+            self.init_test_conf()
         self.session = db.get_session()
         engine = db.get_engine()
         db.Base.metadata.create_all(engine)
@@ -64,6 +52,15 @@ class BaseTest(unittest.TestCase):
             patch.start()
             # 'p=patch' magic is due to how closures work
             self.addCleanup(lambda p=patch: p.stop())
+        utils._EXECUTOR = futurist.SynchronousExecutor(green=True)
+
+    def init_test_conf(self):
+        CONF.reset()
+        log.register_options(CONF)
+        self.cfg = self.useFixture(config_fixture.Config(CONF))
+        self.cfg.set_default('connection', "sqlite:///", group='database')
+        self.cfg.set_default('slave_connection', False, group='database')
+        self.cfg.set_default('max_retries', 10, group='database')
 
     def assertPatchEqual(self, expected, actual):
         expected = sorted(expected, key=lambda p: p['path'])
@@ -84,18 +81,26 @@ class BaseTest(unittest.TestCase):
 class NodeTest(BaseTest):
     def setUp(self):
         super(NodeTest, self).setUp()
-        self.uuid = '1a1a1a1a-2b2b-3c3c-4d4d-5e5e5e5e5e5e'
+        self.uuid = uuidutils.generate_uuid()
         self.bmc_address = '1.2.3.4'
         self.macs = ['11:22:33:44:55:66', '66:55:44:33:22:11']
-        self.node = mock.Mock(driver='pxe_ipmitool',
-                              driver_info={'ipmi_address': self.bmc_address},
-                              properties={'cpu_arch': 'i386', 'local_gb': 40},
-                              uuid=self.uuid,
-                              power_state='power on',
-                              provision_state='inspecting',
-                              extra={},
-                              instance_uuid=None,
-                              maintenance=False)
+        fake_node = {
+            'driver': 'pxe_ipmitool',
+            'driver_info': {'ipmi_address': self.bmc_address},
+            'properties': {'cpu_arch': 'i386', 'local_gb': 40},
+            'uuid': self.uuid,
+            'power_state': 'power on',
+            'provision_state': 'inspecting',
+            'extra': {},
+            'instance_uuid': None,
+            'maintenance': False
+        }
+        mock_to_dict = mock.Mock(return_value=fake_node)
+
+        self.node = mock.Mock(**fake_node)
+        self.node.to_dict = mock_to_dict
+
         self.ports = []
         self.node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=0,
                                              node=self.node, ports=self.ports)
+        self.node_info.node = mock.Mock(return_value=self.node)

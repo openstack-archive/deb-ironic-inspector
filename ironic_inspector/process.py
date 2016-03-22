@@ -17,7 +17,8 @@ import eventlet
 from ironicclient import exceptions
 from oslo_config import cfg
 
-from ironic_inspector.common.i18n import _, _LE, _LI, _LW
+from ironic_inspector.common.i18n import _, _LE, _LI
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector.common import swift
 from ironic_inspector import firewall
 from ironic_inspector import node_cache
@@ -31,6 +32,7 @@ LOG = utils.getProcessingLogger(__name__)
 
 _CREDENTIALS_WAIT_RETRIES = 10
 _CREDENTIALS_WAIT_PERIOD = 3
+_STORAGE_EXCLUDED_KEYS = {'logs'}
 
 
 def _find_node_info(introspection_data, failures):
@@ -104,6 +106,12 @@ def process(introspection_data):
     LOG.info(_LI('Matching node is %s'), node_info.uuid,
              node_info=node_info, data=introspection_data)
 
+    if node_info.finished_at is not None:
+        # race condition or introspection canceled
+        raise utils.Error(_('Node processing already finished with '
+                            'error: %s') % node_info.error,
+                          node_info=node_info, code=400)
+
     try:
         node = node_info.node()
     except exceptions.NotFound:
@@ -130,31 +138,21 @@ def _run_post_hooks(node_info, introspection_data):
     hooks = plugins_base.processing_hooks_manager()
 
     for hook_ext in hooks:
-        node_patches = []
-        ports_patches = {}
-        hook_ext.obj.before_update(introspection_data, node_info,
-                                   node_patches=node_patches,
-                                   ports_patches=ports_patches)
-        if node_patches:
-            LOG.warning(_LW('Using node_patches is deprecated'))
-            node_info.patch(node_patches)
-
-        if ports_patches:
-            LOG.warning(_LW('Using ports_patches is deprecated'))
-            for mac, patches in ports_patches.items():
-                node_info.patch_port(mac, patches)
+        hook_ext.obj.before_update(introspection_data, node_info)
 
 
 def _process_node(node, introspection_data, node_info):
     # NOTE(dtantsur): repeat the check in case something changed
-    utils.check_provision_state(node)
+    ir_utils.check_provision_state(node)
 
     node_info.create_ports(introspection_data.get('macs') or ())
 
     _run_post_hooks(node_info, introspection_data)
 
     if CONF.processing.store_data == 'swift':
-        swift_object_name = swift.store_introspection_data(introspection_data,
+        stored_data = {k: v for k, v in introspection_data.items()
+                       if k not in _STORAGE_EXCLUDED_KEYS}
+        swift_object_name = swift.store_introspection_data(stored_data,
                                                            node_info.uuid)
         LOG.info(_LI('Introspection data was stored in Swift in object %s'),
                  swift_object_name,
@@ -168,7 +166,7 @@ def _process_node(node, introspection_data, node_info):
                   'won\'t be stored',
                   node_info=node_info, data=introspection_data)
 
-    ironic = utils.get_client()
+    ironic = ir_utils.get_client()
     firewall.update_filters(ironic)
 
     node_info.invalidate_cache()
@@ -179,14 +177,14 @@ def _process_node(node, introspection_data, node_info):
     if node_info.options.get('new_ipmi_credentials'):
         new_username, new_password = (
             node_info.options.get('new_ipmi_credentials'))
-        utils.spawn_n(_finish_set_ipmi_credentials,
-                      ironic, node, node_info, introspection_data,
-                      new_username, new_password)
+        utils.executor().submit(_finish_set_ipmi_credentials,
+                                ironic, node, node_info, introspection_data,
+                                new_username, new_password)
         resp['ipmi_setup_credentials'] = True
         resp['ipmi_username'] = new_username
         resp['ipmi_password'] = new_password
     else:
-        utils.spawn_n(_finish, ironic, node_info, introspection_data)
+        utils.executor().submit(_finish, ironic, node_info, introspection_data)
 
     return resp
 
@@ -197,7 +195,7 @@ def _finish_set_ipmi_credentials(ironic, node, node_info, introspection_data,
               'value': new_username},
              {'op': 'add', 'path': '/driver_info/ipmi_password',
               'value': new_password}]
-    if (not utils.get_ipmi_address(node) and
+    if (not ir_utils.get_ipmi_address(node) and
             introspection_data.get('ipmi_address')):
         patch.append({'op': 'add', 'path': '/driver_info/ipmi_address',
                       'value': introspection_data['ipmi_address']})
@@ -229,11 +227,17 @@ def _finish(ironic, node_info, introspection_data):
     try:
         ironic.node.set_power_state(node_info.uuid, 'off')
     except Exception as exc:
-        msg = (_('Failed to power off node %(node)s, check it\'s power '
-                 'management configuration: %(exc)s') %
-               {'node': node_info.uuid, 'exc': exc})
-        node_info.finished(error=msg)
-        raise utils.Error(msg, node_info=node_info, data=introspection_data)
+        if node_info.node().provision_state == 'enroll':
+            LOG.info(_LI("Failed to power off the node in 'enroll' state, "
+                         "ignoring; error was %s") % exc,
+                     node_info=node_info, data=introspection_data)
+        else:
+            msg = (_('Failed to power off node %(node)s, check it\'s '
+                     'power management configuration: %(exc)s') %
+                   {'node': node_info.uuid, 'exc': exc})
+            node_info.finished(error=msg)
+            raise utils.Error(msg, node_info=node_info,
+                              data=introspection_data)
 
     node_info.finished()
     LOG.info(_LI('Introspection finished successfully'),

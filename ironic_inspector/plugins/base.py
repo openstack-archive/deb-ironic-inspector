@@ -16,13 +16,15 @@
 import abc
 
 from oslo_config import cfg
+from oslo_log import log
 import six
 import stevedore
 
-from ironic_inspector.common.i18n import _
+from ironic_inspector.common.i18n import _, _LW
 
 
 CONF = cfg.CONF
+LOG = log.getLogger(__name__)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -48,9 +50,7 @@ class ProcessingHook(object):  # pragma: no cover
 
         :param introspection_data: processed data from the ramdisk.
         :param node_info: NodeInfo instance.
-        :param kwargs: used for extensibility without breaking existing hooks,
-                       currently deprecated arguments node_patches and
-                       ports_patches are provided here.
+        :param kwargs: used for extensibility without breaking existing hooks.
         :returns: nothing.
 
         [RFC 6902] - http://tools.ietf.org/html/rfc6902
@@ -117,6 +117,9 @@ class RuleConditionPlugin(WithValidation):  # pragma: no cover
 @six.add_metaclass(abc.ABCMeta)
 class RuleActionPlugin(WithValidation):  # pragma: no cover
     """Abstract base class for rule action plugins."""
+
+    FORMATTED_PARAMS = []
+    """List of params will be formatted with python format."""
 
     @abc.abstractmethod
     def apply(self, node_info, params, **kwargs):
@@ -194,4 +197,10 @@ def rule_actions_manager():
         _ACTIONS_MGR = stevedore.ExtensionManager(
             'ironic_inspector.rules.actions',
             invoke_on_load=True)
+        for act in _ACTIONS_MGR:
+            # a trick to detect if function was overriden
+            if "rollback" in act.obj.__class__.__dict__:
+                LOG.warning(_LW('Defining "rollback" for introspection rules '
+                                'actions is deprecated (action "%s")'),
+                            act.name)
     return _ACTIONS_MGR

@@ -52,8 +52,13 @@ interpreter of one of supported versions (currently 2.7 and 3.4), use
     Support for Python 3 is highly experimental, stay with Python 2 for the
     production environment for now.
 
-There is a simple functional test that involves fetching the ramdisk from
-Github::
+.. note::
+    This command also runs tests for database migrations. By default the sqlite
+    backend is used. For testing with mysql or postgresql, you need to set up
+    a db named 'openstack_citest' with user 'openstack_citest' and password
+    'openstack_citest' on localhost.
+
+To run the functional tests, use::
 
     tox -e func
 
@@ -210,10 +215,6 @@ Writing a Plugin
       updated on a node.  Please refer to the docstring for details
       and examples.
 
-      .. note::
-        Keyword arguments node_patches and port_patches are also provided, but
-        should not be used in new plugins.
-
   Make your plugin a setuptools entry point under
   ``ironic_inspector.hooks.processing`` namespace and enable it in the
   configuration file (``processing.processing_hooks`` option).
@@ -267,10 +268,6 @@ Writing a Plugin
 
   The following methods and attributes may also be overridden:
 
-  ``rollback(node_info,params,**)``
-      called to clean up when conditions were not met.
-      Default implementation does nothing.
-
   ``validate(params,**)``
       called to validate parameters provided during actions creating.
       Default implementation requires keys listed in ``REQUIRED_PARAMS`` (and
@@ -287,8 +284,8 @@ Writing a Plugin
     ``**`` argument is needed so that we can add optional arguments without
     breaking out-of-tree plugins. Please make sure to include and ignore it.
 
-.. _ironic_inspector.plugins.base: https://github.com/openstack/ironic-inspector/blob/master/ironic_inspector/plugins/base.py
-.. _Introspection Rules: https://github.com/openstack/ironic-inspector#introspection-rules
+.. _ironic_inspector.plugins.base: http://docs.openstack.org/developer/ironic-inspector/api/ironic_inspector.plugins.base.html
+.. _Introspection Rules: http://docs.openstack.org/developer/ironic-inspector/usage.html#introspection-rules
 
 Making changes to the database
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -338,5 +335,5 @@ database::
     ironic-inspector-dbsync revision -m "A short description"
 
 .. _Create a Migration Script: https://alembic.readthedocs.org/en/latest/tutorial.html#create-a-migration-script
-.. _ironic_inspector.db: https://github.com/openstack/ironic-inspector/blob/master/ironic_inspector/db.py
+.. _ironic_inspector.db: http://docs.openstack.org/developer/ironic-inspector/api/ironic_inspector.db.html
 .. _What does Autogenerate Detect (and what does it not detect?): http://alembic.readthedocs.org/en/latest/autogenerate.html#what-does-autogenerate-detect-and-what-does-it-not-detect

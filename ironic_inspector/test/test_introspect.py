@@ -19,6 +19,7 @@ from ironicclient import exceptions
 import mock
 from oslo_config import cfg
 
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector import firewall
 from ironic_inspector import introspect
 from ironic_inspector import node_cache
@@ -48,11 +49,9 @@ class BaseTest(test_base.NodeTest):
 
 
 @mock.patch.object(eventlet.greenthread, 'sleep', lambda _: None)
-@mock.patch.object(utils, 'spawn_n',
-                   lambda f, *a, **kw: f(*a, **kw) and None)
 @mock.patch.object(firewall, 'update_filters', autospec=True)
 @mock.patch.object(node_cache, 'add_node', autospec=True)
-@mock.patch.object(utils, 'get_client', autospec=True)
+@mock.patch.object(ir_utils, 'get_client', autospec=True)
 class TestIntrospect(BaseTest):
     def test_ok(self, client_mock, add_mock, filters_mock):
         cli = self._prepare(client_mock)
@@ -333,11 +332,9 @@ class TestIntrospect(BaseTest):
         self.assertEqual(42, introspect._LAST_INTROSPECTION_TIME)
 
 
-@mock.patch.object(utils, 'spawn_n',
-                   lambda f, *a, **kw: f(*a, **kw) and None)
 @mock.patch.object(firewall, 'update_filters', autospec=True)
 @mock.patch.object(node_cache, 'add_node', autospec=True)
-@mock.patch.object(utils, 'get_client', autospec=True)
+@mock.patch.object(ir_utils, 'get_client', autospec=True)
 class TestSetIpmiCredentials(BaseTest):
     def setUp(self):
         super(TestSetIpmiCredentials, self).setUp()
@@ -416,3 +413,107 @@ class TestSetIpmiCredentials(BaseTest):
 
         self.assertRaises(utils.Error, introspect.introspect, self.uuid,
                           new_ipmi_credentials=self.new_creds)
+
+
+@mock.patch.object(firewall, 'update_filters', autospec=True)
+@mock.patch.object(node_cache, 'get_node', autospec=True)
+@mock.patch.object(ir_utils, 'get_client', autospec=True)
+class TestAbort(BaseTest):
+    def setUp(self):
+        super(TestAbort, self).setUp()
+        self.node_info.started_at = None
+        self.node_info.finished_at = None
+
+    def test_ok(self, client_mock, get_mock, filters_mock):
+        cli = self._prepare(client_mock)
+        get_mock.return_value = self.node_info
+        self.node_info.acquire_lock.return_value = True
+        self.node_info.started_at = time.time()
+        self.node_info.finished_at = None
+
+        introspect.abort(self.node.uuid)
+
+        get_mock.assert_called_once_with(self.uuid, ironic=cli,
+                                         locked=False)
+        self.node_info.acquire_lock.assert_called_once_with(blocking=False)
+        filters_mock.assert_called_once_with(cli)
+        cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
+        self.node_info.finished.assert_called_once_with(error='Canceled '
+                                                        'by operator')
+
+    def test_node_not_found(self, client_mock, get_mock, filters_mock):
+        cli = self._prepare(client_mock)
+        exc = utils.Error('Not found.', code=404)
+        get_mock.side_effect = iter([exc])
+
+        self.assertRaisesRegexp(utils.Error, str(exc),
+                                introspect.abort, self.uuid)
+
+        self.assertEqual(0, filters_mock.call_count)
+        self.assertEqual(0, cli.node.set_power_state.call_count)
+        self.assertEqual(0, self.node_info.finished.call_count)
+
+    def test_node_locked(self, client_mock, get_mock, filters_mock):
+        cli = self._prepare(client_mock)
+        get_mock.return_value = self.node_info
+        self.node_info.acquire_lock.return_value = False
+        self.node_info.started_at = time.time()
+
+        self.assertRaisesRegexp(utils.Error, 'Node is locked, please, '
+                                'retry later', introspect.abort, self.uuid)
+
+        self.assertEqual(0, filters_mock.call_count)
+        self.assertEqual(0, cli.node.set_power_state.call_count)
+        self.assertEqual(0, self.node_info.finshed.call_count)
+
+    def test_introspection_already_finished(self, client_mock,
+                                            get_mock, filters_mock):
+        cli = self._prepare(client_mock)
+        get_mock.return_value = self.node_info
+        self.node_info.acquire_lock.return_value = True
+        self.node_info.started_at = time.time()
+        self.node_info.finished_at = time.time()
+
+        introspect.abort(self.uuid)
+
+        self.assertEqual(0, filters_mock.call_count)
+        self.assertEqual(0, cli.node.set_power_state.call_count)
+        self.assertEqual(0, self.node_info.finshed.call_count)
+
+    def test_firewall_update_exception(self, client_mock, get_mock,
+                                       filters_mock):
+        cli = self._prepare(client_mock)
+        get_mock.return_value = self.node_info
+        self.node_info.acquire_lock.return_value = True
+        self.node_info.started_at = time.time()
+        self.node_info.finished_at = None
+        filters_mock.side_effect = iter([Exception('Boom')])
+
+        introspect.abort(self.uuid)
+
+        get_mock.assert_called_once_with(self.uuid, ironic=cli,
+                                         locked=False)
+        self.node_info.acquire_lock.assert_called_once_with(blocking=False)
+        filters_mock.assert_called_once_with(cli)
+        cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
+        self.node_info.finished.assert_called_once_with(error='Canceled '
+                                                        'by operator')
+
+    def test_node_power_off_exception(self, client_mock, get_mock,
+                                      filters_mock):
+        cli = self._prepare(client_mock)
+        get_mock.return_value = self.node_info
+        self.node_info.acquire_lock.return_value = True
+        self.node_info.started_at = time.time()
+        self.node_info.finished_at = None
+        cli.node.set_power_state.side_effect = iter([Exception('BadaBoom')])
+
+        introspect.abort(self.uuid)
+
+        get_mock.assert_called_once_with(self.uuid, ironic=cli,
+                                         locked=False)
+        self.node_info.acquire_lock.assert_called_once_with(blocking=False)
+        filters_mock.assert_called_once_with(cli)
+        cli.node.set_power_state.assert_called_once_with(self.uuid, 'off')
+        self.node_info.finished.assert_called_once_with(error='Canceled '
+                                                        'by operator')

@@ -26,11 +26,11 @@ from oslo_config import cfg
 from oslo_utils import units
 import requests
 
+from ironic_inspector.common import ironic as ir_utils
 from ironic_inspector import dbsync
 from ironic_inspector import main
 from ironic_inspector import rules
 from ironic_inspector.test import base
-from ironic_inspector import utils
 
 
 CONF = """
@@ -56,12 +56,13 @@ DEFAULT_SLEEP = 2
 
 class Base(base.NodeTest):
     ROOT_URL = 'http://127.0.0.1:5050'
+    IS_FUNCTIONAL = True
 
     def setUp(self):
         super(Base, self).setUp()
         rules.delete_all()
 
-        self.cli = utils.get_client()
+        self.cli = ir_utils.get_client()
         self.cli.reset_mock()
         self.cli.node.get.return_value = self.node
         self.cli.node.update.return_value = self.node
@@ -94,7 +95,8 @@ class Base(base.NodeTest):
                 'bmc_address': self.bmc_address
             },
             'root_disk': {'name': '/dev/sda', 'model': 'Big Data Disk',
-                          'size': 1000 * units.Gi},
+                          'size': 1000 * units.Gi,
+                          'wwn': None},
         }
         self.data_old_ramdisk = {
             'cpus': 4,
@@ -158,6 +160,9 @@ class Base(base.NodeTest):
 
     def call_get_status(self, uuid):
         return self.call('get', '/v1/introspection/%s' % uuid).json()
+
+    def call_abort_introspect(self, uuid):
+        return self.call('post', '/v1/introspection/%s/abort' % uuid)
 
     def call_continue(self, data):
         return self.call('post', '/v1/continue', data=data).json()
@@ -303,6 +308,12 @@ class Test(Base):
                     {'field': 'memory_mb', 'op': 'eq', 'value': 12288},
                     {'field': 'local_gb', 'op': 'gt', 'value': 998},
                     {'field': 'local_gb', 'op': 'lt', 'value': 1000},
+                    {'field': 'local_gb', 'op': 'matches', 'value': '[0-9]+'},
+                    {'field': 'cpu_arch', 'op': 'contains', 'value': '[0-9]+'},
+                    {'field': 'root_disk.wwn', 'op': 'is-empty'},
+                    {'field': 'inventory.interfaces[*].ipv4_address',
+                     'op': 'contains', 'value': r'127\.0\.0\.1',
+                     'invert': True, 'multiple': 'all'},
                 ],
                 'actions': [
                     {'action': 'set-attribute', 'path': '/extra/foo',
@@ -328,14 +339,52 @@ class Test(Base):
         self.call_continue(self.data)
         eventlet.greenthread.sleep(DEFAULT_SLEEP)
 
-        # clean up for second rule
-        self.cli.node.update.assert_any_call(
-            self.uuid,
-            [{'op': 'remove', 'path': '/extra/bar'}])
-        # applying first rule
         self.cli.node.update.assert_any_call(
             self.uuid,
             [{'op': 'add', 'path': '/extra/foo', 'value': 'bar'}])
+
+    def test_conditions_scheme_actions_path(self):
+        rules = [
+            {
+                'conditions': [
+                    {'field': 'node://properties.local_gb', 'op': 'eq',
+                     'value': 40},
+                    {'field': 'node://driver_info.ipmi_address', 'op': 'eq',
+                     'value': self.bmc_address},
+                ],
+                'actions': [
+                    {'action': 'set-attribute', 'path': '/extra/foo',
+                     'value': 'bar'}
+                ]
+            },
+            {
+                'conditions': [
+                    {'field': 'data://inventory.cpu.count', 'op': 'eq',
+                     'value': self.data['inventory']['cpu']['count']},
+                ],
+                'actions': [
+                    {'action': 'set-attribute',
+                     'path': '/driver_info/ipmi_address',
+                     'value': '{data[inventory][bmc_address]}'}
+                ]
+            }
+        ]
+        for rule in rules:
+            self.call_add_rule(rule)
+
+        self.call_introspect(self.uuid)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+        self.call_continue(self.data)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+
+        self.cli.node.update.assert_any_call(
+            self.uuid,
+            [{'op': 'add', 'path': '/extra/foo', 'value': 'bar'}])
+
+        self.cli.node.update.assert_any_call(
+            self.uuid,
+            [{'op': 'add', 'path': '/driver_info/ipmi_address',
+              'value': self.data['inventory']['bmc_address']}])
 
     def test_root_device_hints(self):
         self.node.properties['root_device'] = {'size': 20}
@@ -359,6 +408,30 @@ class Test(Base):
         status = self.call_get_status(self.uuid)
         self.assertEqual({'finished': True, 'error': None}, status)
 
+    def test_abort_introspection(self):
+        self.call_introspect(self.uuid)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+        self.cli.node.set_power_state.assert_called_once_with(self.uuid,
+                                                              'reboot')
+        status = self.call_get_status(self.uuid)
+        self.assertEqual({'finished': False, 'error': None}, status)
+
+        res = self.call_abort_introspect(self.uuid)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+
+        self.assertEqual(res.status_code, 202)
+        status = self.call_get_status(self.uuid)
+        self.assertTrue(status['finished'])
+        self.assertEqual('Canceled by operator', status['error'])
+
+        # Note(mkovacik): we're checking just this doesn't pass OK as
+        # there might be either a race condition (hard to test) that
+        # yields a 'Node already finished.' or an attribute-based
+        # look-up error from some pre-processing hooks because
+        # node_info.finished() deletes the look-up attributes only
+        # after releasing the node lock
+        self.call('post', '/v1/continue', self.data, expect_error=400)
+
 
 @contextlib.contextmanager
 def mocked_server():
@@ -370,7 +443,7 @@ def mocked_server():
             content = CONF % {'db_file': db_file}
             fp.write(content.encode('utf-8'))
 
-        with mock.patch.object(utils, 'get_client'):
+        with mock.patch.object(ir_utils, 'get_client'):
             dbsync.main(args=['--config-file', conf_file, 'upgrade'])
 
             cfg.CONF.reset()

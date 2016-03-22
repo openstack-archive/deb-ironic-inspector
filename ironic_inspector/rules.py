@@ -59,6 +59,10 @@ def conditions_schema():
                         "description": "how to treat multiple values",
                         "enum": ["all", "any", "first"]
                     },
+                    "invert": {
+                        "description": "whether to invert the result",
+                        "type": "boolean"
+                    },
                 },
                 # other properties are validated by plugins
                 "additionalProperties": True
@@ -131,7 +135,14 @@ class IntrospectionRule(object):
                   node_info=node_info, data=data)
         ext_mgr = plugins_base.rule_conditions_manager()
         for cond in self._conditions:
-            field_values = jsonpath.parse(cond.field).find(data)
+            scheme, path = _parse_path(cond.field)
+
+            if scheme == 'node':
+                source_data = node_info.node().to_dict()
+            elif scheme == 'data':
+                source_data = data
+
+            field_values = jsonpath.parse(path).find(source_data)
             field_values = [x.value for x in field_values]
             cond_ext = ext_mgr[cond.op].obj
 
@@ -150,6 +161,9 @@ class IntrospectionRule(object):
 
             for value in field_values:
                 result = cond_ext.check(node_info, value, cond.params)
+                if cond.invert:
+                    result = not result
+
                 if (cond.multiple == 'first'
                         or (cond.multiple == 'all' and not result)
                         or (cond.multiple == 'any' and result)):
@@ -172,7 +186,7 @@ class IntrospectionRule(object):
 
         :param node_info: NodeInfo instance
         :param rollback: if True, rollback actions are executed
-        :param data: introspection data (only used for logging)
+        :param data: introspection data
         """
         if rollback:
             method = 'rollback'
@@ -185,16 +199,52 @@ class IntrospectionRule(object):
 
         ext_mgr = plugins_base.rule_actions_manager()
         for act in self._actions:
+            ext = ext_mgr[act.action].obj
+            for formatted_param in ext.FORMATTED_PARAMS:
+                value = act.params.get(formatted_param)
+                if not value:
+                    continue
+
+                # NOTE(aarefiev): verify provided value with introspection
+                # data format specifications.
+                # TODO(aarefiev): simple verify on import rule time.
+                try:
+                    act.params[formatted_param] = value.format(data=data)
+                except KeyError as e:
+                    raise utils.Error(_('Invalid formatting variable key '
+                                        'provided: %s') % e,
+                                      node_info=node_info, data=data)
+
             LOG.debug('Running %(what)s action `%(action)s %(params)s`',
                       {'action': act.action, 'params': act.params,
                        'what': method},
                       node_info=node_info, data=data)
-            ext = ext_mgr[act.action].obj
             getattr(ext, method)(node_info, act.params)
 
         LOG.debug('Successfully applied %s',
                   'rollback actions' if rollback else 'actions',
                   node_info=node_info, data=data)
+
+
+def _parse_path(path):
+    """Parse path, extract scheme and path.
+
+     Parse path with 'node' and 'data' scheme, which links on
+     introspection data and node info respectively. If scheme is
+     missing in path, default is 'data'.
+
+    :param path: data or node path
+    :return: tuple (scheme, path)
+    """
+    try:
+        index = path.index('://')
+    except ValueError:
+        scheme = 'data'
+        path = path
+    else:
+        scheme = path[:index]
+        path = path[index + 3:]
+    return scheme, path
 
 
 def create(conditions_json, actions_json, uuid=None,
@@ -233,17 +283,25 @@ def create(conditions_json, actions_json, uuid=None,
     act_mgr = plugins_base.rule_actions_manager()
 
     conditions = []
+    reserved_params = {'op', 'field', 'multiple', 'invert'}
     for cond_json in conditions_json:
         field = cond_json['field']
+
+        scheme, path = _parse_path(field)
+
+        if scheme not in ('node', 'data'):
+            raise utils.Error(_('Unsupported scheme for field: %s, valid '
+                                'values are node:// or data://') % scheme)
+        # verify field as JSON path
         try:
-            jsonpath.parse(field)
+            jsonpath.parse(path)
         except Exception as exc:
             raise utils.Error(_('Unable to parse field JSON path %(field)s: '
                                 '%(error)s') % {'field': field, 'error': exc})
 
         plugin = cond_mgr[cond_json['op']].obj
         params = {k: v for k, v in cond_json.items()
-                  if k not in ('op', 'field', 'multiple')}
+                  if k not in reserved_params}
         try:
             plugin.validate(params)
         except ValueError as exc:
@@ -251,8 +309,11 @@ def create(conditions_json, actions_json, uuid=None,
                                 '%(error)s') %
                               {'op': cond_json['op'], 'error': exc})
 
-        conditions.append((cond_json['field'], cond_json['op'],
-                           cond_json.get('multiple', 'any'), params))
+        conditions.append((cond_json['field'],
+                           cond_json['op'],
+                           cond_json.get('multiple', 'any'),
+                           cond_json.get('invert', False),
+                           params))
 
     actions = []
     for action_json in actions_json:
@@ -272,9 +333,11 @@ def create(conditions_json, actions_json, uuid=None,
             rule = db.Rule(uuid=uuid, description=description,
                            disabled=False, created_at=timeutils.utcnow())
 
-            for field, op, multiple, params in conditions:
-                rule.conditions.append(db.RuleCondition(op=op, field=field,
+            for field, op, multiple, invert, params in conditions:
+                rule.conditions.append(db.RuleCondition(op=op,
+                                                        field=field,
                                                         multiple=multiple,
+                                                        invert=invert,
                                                         params=params))
 
             for action, params in actions:
@@ -364,7 +427,7 @@ def apply(node_info, data):
     if to_rollback:
         LOG.debug('Running rollback actions', node_info=node_info, data=data)
         for rule in to_rollback:
-            rule.apply_actions(node_info, rollback=True)
+            rule.apply_actions(node_info, rollback=True, data=data)
     else:
         LOG.debug('No rollback actions to apply',
                   node_info=node_info, data=data)
@@ -372,7 +435,7 @@ def apply(node_info, data):
     if to_apply:
         LOG.debug('Running actions', node_info=node_info, data=data)
         for rule in to_apply:
-            rule.apply_actions(node_info, rollback=False)
+            rule.apply_actions(node_info, rollback=False, data=data)
     else:
         LOG.debug('No actions to apply', node_info=node_info, data=data)
 

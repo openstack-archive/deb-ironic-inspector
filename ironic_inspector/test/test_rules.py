@@ -15,19 +15,19 @@
 """Tests for introspection rules."""
 
 import mock
+from oslo_utils import uuidutils
 
 from ironic_inspector import db
-from ironic_inspector import node_cache
 from ironic_inspector.plugins import base as plugins_base
 from ironic_inspector import rules
 from ironic_inspector.test import base as test_base
 from ironic_inspector import utils
 
 
-class BaseTest(test_base.BaseTest):
+class BaseTest(test_base.NodeTest):
     def setUp(self):
         super(BaseTest, self).setUp()
-        self.uuid = 'uuid'
+        self.uuid = uuidutils.generate_uuid()
         self.conditions_json = [
             {'op': 'eq', 'field': 'memory_mb', 'value': 1024},
             {'op': 'eq', 'field': 'local_gb', 'value': 60},
@@ -40,7 +40,6 @@ class BaseTest(test_base.BaseTest):
             'memory_mb': 1024,
             'local_gb': 42,
         }
-        self.node_info = node_cache.NodeInfo(uuid=self.uuid, started_at=42)
 
 
 class TestCreateRule(BaseTest):
@@ -139,7 +138,7 @@ class TestGetRule(BaseTest):
     def test_get(self):
         rule_json = rules.get(self.uuid).as_dict()
 
-        self.assertTrue(rule_json.pop(self.uuid))
+        self.assertTrue(rule_json.pop('uuid'))
         self.assertEqual({'description': None,
                           'conditions': self.conditions_json,
                           'actions': self.actions_json},
@@ -149,15 +148,16 @@ class TestGetRule(BaseTest):
         self.assertRaises(utils.Error, rules.get, 'foobar')
 
     def test_get_all(self):
-        rules.create(self.conditions_json, self.actions_json, uuid='uuid2')
-        self.assertEqual([self.uuid, 'uuid2'],
-                         [r.as_dict()['uuid'] for r in rules.get_all()])
+        uuid2 = uuidutils.generate_uuid()
+        rules.create(self.conditions_json, self.actions_json, uuid=uuid2)
+        self.assertEqual({self.uuid, uuid2},
+                         {r.as_dict()['uuid'] for r in rules.get_all()})
 
 
 class TestDeleteRule(BaseTest):
     def setUp(self):
         super(TestDeleteRule, self).setUp()
-        self.uuid2 = self.uuid + '-2'
+        self.uuid2 = uuidutils.generate_uuid()
         rules.create(self.conditions_json, self.actions_json, uuid=self.uuid)
         rules.create(self.conditions_json, self.actions_json, uuid=self.uuid2)
 
@@ -204,6 +204,23 @@ class TestCheckConditions(BaseTest):
                                              {'value': 60})
         self.assertEqual(len(self.conditions_json),
                          self.cond_mock.check.call_count)
+        self.assertTrue(res)
+
+    def test_invert(self, mock_ext_mgr):
+        self.conditions_json = [
+            {'op': 'eq', 'field': 'memory_mb', 'value': 42,
+             'invert': True},
+        ]
+        self.rule = rules.create(conditions_json=self.conditions_json,
+                                 actions_json=self.actions_json)
+
+        mock_ext_mgr.return_value.__getitem__.return_value = self.ext_mock
+        self.cond_mock.check.return_value = False
+
+        res = self.rule.check_conditions(self.node_info, self.data)
+
+        self.cond_mock.check.assert_called_once_with(self.node_info, 1024,
+                                                     {'value': 42})
         self.assertTrue(res)
 
     def test_no_field(self, mock_ext_mgr):
@@ -319,6 +336,38 @@ class TestCheckConditionsMultiple(BaseTest):
                           data)
 
 
+class TestCheckConditionsSchemePath(BaseTest):
+    def test_conditions_data_path(self):
+        self.data_set = [
+            ([{'op': 'eq', 'field': 'data://memory_mb', 'value': 1024}],
+             True),
+            ([{'op': 'gt', 'field': 'data://local_gb', 'value': 42}],
+             False)
+        ]
+
+        for condition, res in self.data_set:
+            rule = rules.create(conditions_json=condition,
+                                actions_json=self.actions_json)
+            self.assertIs(res,
+                          rule.check_conditions(self.node_info, self.data),
+                          self.data)
+
+    def test_conditions_node_path(self):
+        self.node_set = [
+            ([{'op': 'eq', 'field': 'node://driver_info.ipmi_address',
+               'value': self.bmc_address}],
+             True),
+            ([{'op': 'eq', 'field': 'node://driver', 'value': 'fake'}],
+             False)
+        ]
+
+        for condition, res in self.node_set:
+            rule = rules.create(conditions_json=condition,
+                                actions_json=self.actions_json)
+            self.assertIs(res,
+                          rule.check_conditions(self.node_info, self.data))
+
+
 @mock.patch.object(plugins_base, 'rule_actions_manager', autospec=True)
 class TestApplyActions(BaseTest):
     def setUp(self):
@@ -328,12 +377,13 @@ class TestApplyActions(BaseTest):
         self.rule = rules.create(conditions_json=self.conditions_json,
                                  actions_json=self.actions_json)
         self.act_mock = mock.Mock(spec=plugins_base.RuleActionPlugin)
+        self.act_mock.FORMATTED_PARAMS = ['value']
         self.ext_mock = mock.Mock(spec=['obj'], obj=self.act_mock)
 
     def test_apply(self, mock_ext_mgr):
         mock_ext_mgr.return_value.__getitem__.return_value = self.ext_mock
 
-        self.rule.apply_actions(self.node_info)
+        self.rule.apply_actions(self.node_info, data=self.data)
 
         self.act_mock.apply.assert_any_call(self.node_info,
                                             {'message': 'boom!'})
@@ -341,6 +391,33 @@ class TestApplyActions(BaseTest):
         self.assertEqual(len(self.actions_json),
                          self.act_mock.apply.call_count)
         self.assertFalse(self.act_mock.rollback.called)
+
+    def test_apply_data_format_value(self, mock_ext_mgr):
+        self.rule = rules.create(actions_json=[
+            {'action': 'set-attribute',
+             'path': '/driver_info/ipmi_address',
+             'value': '{data[memory_mb]}'}],
+            conditions_json=self.conditions_json
+        )
+        mock_ext_mgr.return_value.__getitem__.return_value = self.ext_mock
+
+        self.rule.apply_actions(self.node_info, data=self.data)
+
+        self.assertEqual(1, self.act_mock.apply.call_count)
+        self.assertFalse(self.act_mock.rollback.called)
+
+    def test_apply_data_format_value_fail(self, mock_ext_mgr):
+        self.rule = rules.create(
+            actions_json=[
+                {'action': 'set-attribute',
+                 'path': '/driver_info/ipmi_address',
+                 'value': '{data[inventory][bmc_address]}'}],
+            conditions_json=self.conditions_json
+        )
+        mock_ext_mgr.return_value.__getitem__.return_value = self.ext_mock
+
+        self.assertRaises(utils.Error, self.rule.apply_actions,
+                          self.node_info, data=self.data)
 
     def test_rollback(self, mock_ext_mgr):
         mock_ext_mgr.return_value.__getitem__.return_value = self.ext_mock
@@ -378,7 +455,7 @@ class TestApply(BaseTest):
             rule.check_conditions.assert_called_once_with(self.node_info,
                                                           self.data)
             rule.apply_actions.assert_called_once_with(
-                self.node_info, rollback=bool(idx))
+                self.node_info, rollback=bool(idx), data=self.data)
 
     def test_actions(self, mock_get_all):
         mock_get_all.return_value = self.rules
@@ -391,7 +468,7 @@ class TestApply(BaseTest):
             rule.check_conditions.assert_called_once_with(self.node_info,
                                                           self.data)
             rule.apply_actions.assert_called_once_with(
-                self.node_info, rollback=bool(idx))
+                self.node_info, rollback=bool(idx), data=self.data)
 
     def test_no_rollback(self, mock_get_all):
         mock_get_all.return_value = self.rules
@@ -404,7 +481,7 @@ class TestApply(BaseTest):
             rule.check_conditions.assert_called_once_with(self.node_info,
                                                           self.data)
             rule.apply_actions.assert_called_once_with(
-                self.node_info, rollback=False)
+                self.node_info, rollback=False, data=self.data)
 
     def test_only_rollback(self, mock_get_all):
         mock_get_all.return_value = self.rules
@@ -417,4 +494,4 @@ class TestApply(BaseTest):
             rule.check_conditions.assert_called_once_with(self.node_info,
                                                           self.data)
             rule.apply_actions.assert_called_once_with(
-                self.node_info, rollback=True)
+                self.node_info, rollback=True, data=self.data)
