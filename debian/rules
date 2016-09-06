@@ -2,7 +2,7 @@
 
 PYTHONS:=$(shell pyversions -vr)
 
-UPSTREAM_GIT = git://github.com/openstack/ironic-inspector.git
+UPSTREAM_GIT = https://github.com/openstack/ironic-inspector.git
 include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
