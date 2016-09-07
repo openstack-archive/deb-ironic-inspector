@@ -1,0 +1,9 @@
+Code-Review+1: Yuiko Takada Mori <y-mori@ti.jp.nec.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 17 Apr 2015 11:58:05 +0000
+Reviewed-on: https://review.openstack.org/174739
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/1.1

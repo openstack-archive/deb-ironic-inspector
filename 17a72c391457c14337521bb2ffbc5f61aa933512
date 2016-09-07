@@ -1,0 +1,10 @@
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Imre Farkas <ifarkas@redhat.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Yuiko Takada Mori <y-mori@ti.jp.nec.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Oct 2015 10:33:57 +0000
+Reviewed-on: https://review.openstack.org/229988
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/liberty
