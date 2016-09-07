@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Pavlo Shchelokovskyy <pshchelokovskyy@mirantis.com>
+Code-Review+2: Imre Farkas <ifarkas@redhat.com>
+Workflow+1: Imre Farkas <ifarkas@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 20 Apr 2016 08:39:18 +0000
+Reviewed-on: https://review.openstack.org/307523
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master

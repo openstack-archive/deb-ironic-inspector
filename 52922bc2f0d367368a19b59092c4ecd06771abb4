@@ -1,0 +1,12 @@
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+1: Kyrylo Romanenko <kromanenko@mirantis.com>
+Code-Review+1: Milan Kováčik <mkovacik@redhat.com>
+Code-Review+1: Zhenguo Niu <Niu.ZGlinux@gmail.com>
+Code-Review+2: Imre Farkas <ifarkas@redhat.com>
+Workflow+1: Imre Farkas <ifarkas@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 Aug 2016 09:25:15 +0000
+Reviewed-on: https://review.openstack.org/349924
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master

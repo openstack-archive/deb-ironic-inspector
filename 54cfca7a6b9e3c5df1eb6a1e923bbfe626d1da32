@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Xavier <marcusrafael@lsd.ufcg.edu.br>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 08 Jul 2016 12:48:35 +0000
+Reviewed-on: https://review.openstack.org/339491
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master

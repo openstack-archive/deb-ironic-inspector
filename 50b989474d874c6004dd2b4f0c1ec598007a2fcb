@@ -1,0 +1,9 @@
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Imre Farkas <ifarkas@redhat.com>
+Workflow+1: Imre Farkas <ifarkas@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 05 May 2016 12:13:03 +0000
+Reviewed-on: https://review.openstack.org/310031
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master

@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 31 Aug 2016 04:33:16 +0000
+Reviewed-on: https://review.openstack.org/361869
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master

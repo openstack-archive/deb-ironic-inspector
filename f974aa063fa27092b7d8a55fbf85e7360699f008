@@ -1,0 +1,11 @@
+Code-Review+1: Sharath Rao <sharath.rao@ericsson.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+1: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 30 Mar 2016 12:24:54 +0000
+Reviewed-on: https://review.openstack.org/298768
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
