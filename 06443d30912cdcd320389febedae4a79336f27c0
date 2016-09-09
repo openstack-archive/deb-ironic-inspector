@@ -1,0 +1,9 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 13 Jun 2016 10:20:12 +0000
+Reviewed-on: https://review.openstack.org/328538
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/mitaka

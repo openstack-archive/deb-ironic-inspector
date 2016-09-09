@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+1: Miles Gould <mgould@redhat.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Jun 2016 15:53:36 +0000
+Reviewed-on: https://review.openstack.org/332408
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/mitaka
