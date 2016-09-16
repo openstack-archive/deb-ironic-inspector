@@ -1,0 +1,10 @@
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 16 Sep 2016 15:49:37 +0000
+Reviewed-on: https://review.openstack.org/358779
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
