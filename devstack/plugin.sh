@@ -18,8 +18,6 @@ IRONIC_INSPECTOR_URI="http://$IRONIC_INSPECTOR_HOST:$IRONIC_INSPECTOR_PORT"
 IRONIC_INSPECTOR_BUILD_RAMDISK=$(trueorfalse False IRONIC_INSPECTOR_BUILD_RAMDISK)
 IRONIC_AGENT_KERNEL_URL=${IRONIC_AGENT_KERNEL_URL:-http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe.vmlinuz}
 IRONIC_AGENT_RAMDISK_URL=${IRONIC_AGENT_RAMDISK_URL:-http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe_image-oem.cpio.gz}
-IRONIC_INSPECTOR_RAMDISK_ELEMENT=${IRONIC_INSPECTOR_RAMDISK_ELEMENT:-ironic-discoverd-ramdisk}
-IRONIC_INSPECTOR_RAMDISK_FLAVOR=${IRONIC_INSPECTOR_RAMDISK_FLAVOR:-fedora $IRONIC_INSPECTOR_RAMDISK_ELEMENT}
 IRONIC_INSPECTOR_COLLECTORS=${IRONIC_INSPECTOR_COLLECTORS:-default,logs}
 IRONIC_INSPECTOR_RAMDISK_LOGDIR=${IRONIC_INSPECTOR_RAMDISK_LOGDIR:-$IRONIC_INSPECTOR_DATA_DIR/ramdisk-logs}
 IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS=${IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS:-True}
@@ -68,32 +66,25 @@ function install_inspector_client {
         git_clone_by_name python-ironic-inspector-client
         setup_dev_lib python-ironic-inspector-client
     else
-        # TODO(dtantsur): switch to pip_install_gr
-        pip_install python-ironic-inspector-client
+        pip_install_gr python-ironic-inspector-client
     fi
 }
 
 function start_inspector {
-    screen_it ironic-inspector \
-        "cd $IRONIC_INSPECTOR_DIR && $IRONIC_INSPECTOR_CMD"
+    run_process ironic-inspector "$IRONIC_INSPECTOR_CMD"
 }
 
 function start_inspector_dhcp {
-    screen_it ironic-inspector-dhcp \
+    run_process ironic-inspector-dhcp \
         "sudo dnsmasq --conf-file=$IRONIC_INSPECTOR_DHCP_CONF_FILE"
 }
 
 function stop_inspector {
-    screen -S $SCREEN_NAME -p ironic-inspector -X kill
+    stop_process ironic-inspector
 }
 
 function stop_inspector_dhcp {
-    screen -S $SCREEN_NAME -p ironic-inspector-dhcp -X kill
-}
-
-function inspector_uses_ipa {
-    [[ $IRONIC_INSPECTOR_RAMDISK_ELEMENT = "ironic-agent" ]] || [[ $IRONIC_INSPECTOR_RAMDISK_FLAVOR =~ (ironic-agent$|^ironic-agent) ]] && return 0
-    return 1
+    stop_process ironic-inspector-dhcp
 }
 
 ### Configuration
@@ -104,35 +95,24 @@ function prepare_tftp {
     IRONIC_INSPECTOR_INITRAMFS_PATH="$IRONIC_INSPECTOR_IMAGE_PATH.initramfs"
     IRONIC_INSPECTOR_CALLBACK_URI="$IRONIC_INSPECTOR_INTERNAL_URI/v1/continue"
 
-    if inspector_uses_ipa; then
-        IRONIC_INSPECTOR_KERNEL_CMDLINE="ipa-inspection-callback-url=$IRONIC_INSPECTOR_CALLBACK_URI systemd.journald.forward_to_console=yes"
-        IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE vga=normal console=tty0 console=ttyS0"
-        IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE ipa-inspection-collectors=$IRONIC_INSPECTOR_COLLECTORS"
-        IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE ipa-debug=1"
-        if [[ "$IRONIC_INSPECTOR_BUILD_RAMDISK" == "True" ]]; then
-            if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
-                build_ipa_coreos_ramdisk "$IRONIC_INSPECTOR_KERNEL_PATH" "$IRONIC_INSPECTOR_INITRAMFS_PATH"
-            fi
-        else
-            # download the agent image tarball
-            if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
-                if [ -e "$IRONIC_DEPLOY_KERNEL_PATH" -a -e "$IRONIC_DEPLOY_RAMDISK_PATH" ]; then
-                    cp $IRONIC_DEPLOY_KERNEL_PATH $IRONIC_INSPECTOR_KERNEL_PATH
-                    cp $IRONIC_DEPLOY_RAMDISK_PATH $IRONIC_INSPECTOR_INITRAMFS_PATH
-                else
-                    wget "$IRONIC_AGENT_KERNEL_URL" -O $IRONIC_INSPECTOR_KERNEL_PATH
-                    wget "$IRONIC_AGENT_RAMDISK_URL" -O $IRONIC_INSPECTOR_INITRAMFS_PATH
-                fi
-            fi
+    IRONIC_INSPECTOR_KERNEL_CMDLINE="ipa-inspection-callback-url=$IRONIC_INSPECTOR_CALLBACK_URI systemd.journald.forward_to_console=yes"
+    IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE vga=normal console=tty0 console=ttyS0"
+    IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE ipa-inspection-collectors=$IRONIC_INSPECTOR_COLLECTORS"
+    IRONIC_INSPECTOR_KERNEL_CMDLINE="$IRONIC_INSPECTOR_KERNEL_CMDLINE ipa-debug=1"
+    if [[ "$IRONIC_INSPECTOR_BUILD_RAMDISK" == "True" ]]; then
+        if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
+            build_ipa_ramdisk "$IRONIC_INSPECTOR_KERNEL_PATH" "$IRONIC_INSPECTOR_INITRAMFS_PATH"
         fi
     else
-        IRONIC_INSPECTOR_KERNEL_CMDLINE="discoverd_callback_url=$IRONIC_INSPECTOR_CALLBACK_URI inspector_callback_url=$IRONIC_INSPECTOR_CALLBACK_URI"
+        # download the agent image tarball
         if [ ! -e "$IRONIC_INSPECTOR_KERNEL_PATH" -o ! -e "$IRONIC_INSPECTOR_INITRAMFS_PATH" ]; then
-            if [[ $(type -P ramdisk-image-create) == "" ]]; then
-                pip_install diskimage_builder
+            if [ -e "$IRONIC_DEPLOY_KERNEL_PATH" -a -e "$IRONIC_DEPLOY_RAMDISK_PATH" ]; then
+                cp $IRONIC_DEPLOY_KERNEL_PATH $IRONIC_INSPECTOR_KERNEL_PATH
+                cp $IRONIC_DEPLOY_RAMDISK_PATH $IRONIC_INSPECTOR_INITRAMFS_PATH
+            else
+                wget "$IRONIC_AGENT_KERNEL_URL" -O $IRONIC_INSPECTOR_KERNEL_PATH
+                wget "$IRONIC_AGENT_RAMDISK_URL" -O $IRONIC_INSPECTOR_INITRAMFS_PATH
             fi
-            ramdisk-image-create $IRONIC_INSPECTOR_RAMDISK_FLAVOR \
-                -o $IRONIC_INSPECTOR_IMAGE_PATH
         fi
     fi
 
@@ -166,6 +146,18 @@ EOF
     fi
 }
 
+function inspector_configure_auth_for {
+    inspector_iniset $1 auth_type password
+    inspector_iniset $1 auth_url "$KEYSTONE_SERVICE_URI"
+    inspector_iniset $1 username $IRONIC_INSPECTOR_ADMIN_USER
+    inspector_iniset $1 password $SERVICE_PASSWORD
+    inspector_iniset $1 project_name $SERVICE_PROJECT_NAME
+    inspector_iniset $1 user_domain_id default
+    inspector_iniset $1 project_domain_id default
+    inspector_iniset $1 cafile $SSL_BUNDLE_FILE
+    inspector_iniset $1 os_region $REGION_NAME
+}
+
 function configure_inspector {
     mkdir_chown_stack "$IRONIC_INSPECTOR_CONF_DIR"
     mkdir_chown_stack "$IRONIC_INSPECTOR_DATA_DIR"
@@ -174,11 +166,7 @@ function configure_inspector {
 
     cp "$IRONIC_INSPECTOR_DIR/example.conf" "$IRONIC_INSPECTOR_CONF_FILE"
     inspector_iniset DEFAULT debug $IRONIC_INSPECTOR_DEBUG
-    inspector_iniset ironic os_auth_url "$KEYSTONE_SERVICE_URI"
-    inspector_iniset ironic os_username $IRONIC_INSPECTOR_ADMIN_USER
-    inspector_iniset ironic os_password $SERVICE_PASSWORD
-    inspector_iniset ironic os_tenant_name $SERVICE_PROJECT_NAME
-
+    inspector_configure_auth_for ironic
     configure_auth_token_middleware $IRONIC_INSPECTOR_CONF_FILE $IRONIC_INSPECTOR_ADMIN_USER $IRONIC_INSPECTOR_AUTH_CACHE_DIR/api
 
     inspector_iniset DEFAULT listen_port $IRONIC_INSPECTOR_PORT
@@ -227,11 +215,7 @@ function configure_inspector {
 }
 
 function configure_inspector_swift {
-    inspector_iniset swift os_auth_url "$KEYSTONE_SERVICE_URI/v2.0"
-    inspector_iniset swift username $IRONIC_INSPECTOR_ADMIN_USER
-    inspector_iniset swift password $SERVICE_PASSWORD
-    inspector_iniset swift tenant_name $SERVICE_PROJECT_NAME
-
+    inspector_configure_auth_for swift
     inspector_iniset processing store_data swift
 }
 
@@ -289,10 +273,11 @@ function create_ironic_inspector_cache_dir {
 }
 
 function cleanup_inspector {
-    rm -f $IRONIC_TFTPBOOT_DIR/pxelinux.cfg/default
-    rm -f $IRONIC_TFTPBOOT_DIR/ironic-inspector.*
     if [[ "$IRONIC_IPXE_ENABLED" == "True" ]] ; then
         rm -f $IRONIC_HTTP_DIR/ironic-inspector.*
+    else
+        rm -f $IRONIC_TFTPBOOT_DIR/pxelinux.cfg/default
+        rm -f $IRONIC_TFTPBOOT_DIR/ironic-inspector.*
     fi
     sudo rm -f /etc/sudoers.d/ironic-inspector-rootwrap
     sudo rm -rf $IRONIC_INSPECTOR_AUTH_CACHE_DIR

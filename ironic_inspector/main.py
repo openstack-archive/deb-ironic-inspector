@@ -47,15 +47,26 @@ app = flask.Flask(__name__)
 LOG = utils.getProcessingLogger(__name__)
 
 MINIMUM_API_VERSION = (1, 0)
-CURRENT_API_VERSION = (1, 3)
+CURRENT_API_VERSION = (1, 6)
 _LOGGING_EXCLUDED_KEYS = ('logs',)
+
+
+def _get_version():
+    ver = flask.request.headers.get(conf.VERSION_HEADER,
+                                    _DEFAULT_API_VERSION)
+    try:
+        requested = tuple(int(x) for x in ver.split('.'))
+    except (ValueError, TypeError):
+        return error_response(_('Malformed API version: expected string '
+                                'in form of X.Y'), code=400)
+    return requested
 
 
 def _format_version(ver):
     return '%d.%d' % ver
 
 
-_DEFAULT_API_VERSION = _format_version(MINIMUM_API_VERSION)
+_DEFAULT_API_VERSION = _format_version(CURRENT_API_VERSION)
 
 
 def error_response(exc, code=500):
@@ -86,13 +97,7 @@ def convert_exceptions(func):
 
 @app.before_request
 def check_api_version():
-    requested = flask.request.headers.get(conf.VERSION_HEADER,
-                                          _DEFAULT_API_VERSION)
-    try:
-        requested = tuple(int(x) for x in requested.split('.'))
-    except (ValueError, TypeError):
-        return error_response(_('Malformed API version: expected string '
-                                'in form of X.Y'), code=400)
+    requested = _get_version()
 
     if requested < MINIMUM_API_VERSION or requested > CURRENT_API_VERSION:
         return error_response(_('Unsupported API version %(requested)s, '
@@ -178,13 +183,10 @@ def api_continue():
 
 
 # TODO(sambetts) Add API discovery for this endpoint
-@app.route('/v1/introspection/<uuid>', methods=['GET', 'POST'])
+@app.route('/v1/introspection/<node_id>', methods=['GET', 'POST'])
 @convert_exceptions
-def api_introspection(uuid):
+def api_introspection(node_id):
     utils.check_auth(flask.request)
-
-    if not uuidutils.is_uuid_like(uuid):
-        raise utils.Error(_('Invalid UUID value'), code=400)
 
     if flask.request.method == 'POST':
         new_ipmi_password = flask.request.args.get('new_ipmi_password',
@@ -198,40 +200,59 @@ def api_introspection(uuid):
         else:
             new_ipmi_credentials = None
 
-        introspect.introspect(uuid,
+        introspect.introspect(node_id,
                               new_ipmi_credentials=new_ipmi_credentials,
                               token=flask.request.headers.get('X-Auth-Token'))
         return '', 202
     else:
-        node_info = node_cache.get_node(uuid)
+        node_info = node_cache.get_node(node_id)
         return flask.json.jsonify(finished=bool(node_info.finished_at),
                                   error=node_info.error or None)
 
 
-@app.route('/v1/introspection/<uuid>/abort', methods=['POST'])
+@app.route('/v1/introspection/<node_id>/abort', methods=['POST'])
 @convert_exceptions
-def api_introspection_abort(uuid):
+def api_introspection_abort(node_id):
     utils.check_auth(flask.request)
-
-    if not uuidutils.is_uuid_like(uuid):
-        raise utils.Error(_('Invalid UUID value'), code=400)
-
-    introspect.abort(uuid, token=flask.request.headers.get('X-Auth-Token'))
+    introspect.abort(node_id, token=flask.request.headers.get('X-Auth-Token'))
     return '', 202
 
 
-@app.route('/v1/introspection/<uuid>/data', methods=['GET'])
+@app.route('/v1/introspection/<node_id>/data', methods=['GET'])
 @convert_exceptions
-def api_introspection_data(uuid):
+def api_introspection_data(node_id):
     utils.check_auth(flask.request)
+
     if CONF.processing.store_data == 'swift':
-        res = swift.get_introspection_data(uuid)
+        if not uuidutils.is_uuid_like(node_id):
+            node = ir_utils.get_node(node_id, fields=['uuid'])
+            node_id = node.uuid
+        res = swift.get_introspection_data(node_id)
         return res, 200, {'Content-Type': 'application/json'}
     else:
         return error_response(_('Inspector is not configured to store data. '
                                 'Set the [processing] store_data '
                                 'configuration option to change this.'),
                               code=404)
+
+
+@app.route('/v1/introspection/<node_id>/data/unprocessed', methods=['POST'])
+@convert_exceptions
+def api_introspection_reapply(node_id):
+    utils.check_auth(flask.request)
+
+    if flask.request.content_length:
+        return error_response(_('User data processing is not '
+                                'supported yet'), code=400)
+
+    if CONF.processing.store_data == 'swift':
+        process.reapply(node_id)
+        return '', 202
+    else:
+        return error_response(_('Inspector is not configured to store'
+                                ' data. Set the [processing] '
+                                'store_data configuration option to '
+                                'change this.'), code=400)
 
 
 def rule_repr(rule, short):
@@ -263,7 +284,10 @@ def api_rules():
                             actions_json=body.get('actions', []),
                             uuid=body.get('uuid'),
                             description=body.get('description'))
-        return flask.jsonify(rule_repr(rule, short=False))
+
+        response_code = (200 if _get_version() < (1, 6) else 201)
+        return flask.make_response(
+            flask.jsonify(rule_repr(rule, short=False)), response_code)
 
 
 @app.route('/v1/rules/<uuid>', methods=['GET', 'DELETE'])
@@ -351,7 +375,6 @@ class Service(object):
 
         log.set_defaults(default_log_levels=[
             'sqlalchemy=WARNING',
-            'keystoneclient=INFO',
             'iso8601=WARNING',
             'requests=WARNING',
             'urllib3.connectionpool=WARNING',
@@ -388,8 +411,9 @@ class Service(object):
             hooks = [ext.name for ext in
                      plugins_base.processing_hooks_manager()]
         except KeyError as exc:
-            # stevedore raises KeyError on missing hook
-            LOG.critical(_LC('Hook %s failed to load or was not found'),
+            # callback function raises MissingHookError derived from KeyError
+            # on missing hook
+            LOG.critical(_LC('Hook(s) %s failed to load or was not found'),
                          str(exc))
             sys.exit(1)
 

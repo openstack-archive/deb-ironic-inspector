@@ -336,7 +336,25 @@ class TestNodeCacheGetNode(test_base.NodeTest):
         self.assertTrue(info._locked)
 
     def test_not_found(self):
-        self.assertRaises(utils.Error, node_cache.get_node, 'foo')
+        self.assertRaises(utils.Error, node_cache.get_node,
+                          uuidutils.generate_uuid())
+
+    def test_with_name(self):
+        started_at = time.time() - 42
+        session = db.get_session()
+        with session.begin():
+            db.Node(uuid=self.uuid, started_at=started_at).save(session)
+        ironic = mock.Mock()
+        ironic.node.get.return_value = self.node
+
+        info = node_cache.get_node('name', ironic=ironic)
+
+        self.assertEqual(self.uuid, info.uuid)
+        self.assertEqual(started_at, info.started_at)
+        self.assertIsNone(info.finished_at)
+        self.assertIsNone(info.error)
+        self.assertFalse(info._locked)
+        ironic.node.get.assert_called_once_with('name')
 
 
 @mock.patch.object(time, 'time', lambda: 42.0)
@@ -379,16 +397,6 @@ class TestNodeInfoFinished(test_base.NodeTest):
         self.node_info.acquire_lock()
         self.node_info.finished()
         self.assertFalse(self.node_info._locked)
-
-
-class TestInit(unittest.TestCase):
-    def setUp(self):
-        super(TestInit, self).setUp()
-
-    def test_ok(self):
-        db.init()
-        session = db.get_session()
-        db.model_query(db.Node, session=session)
 
 
 class TestNodeInfoOptions(test_base.NodeTest):

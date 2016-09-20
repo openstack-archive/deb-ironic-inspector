@@ -23,9 +23,6 @@ from ironic_inspector.plugins import base
 from ironic_inspector import utils
 
 
-LOG = utils.getProcessingLogger(__name__)
-
-
 def coerce(value, expected):
     if isinstance(expected, float):
         return float(value)
@@ -69,6 +66,7 @@ class NeCondition(SimpleCondition):
 
 class EmptyCondition(base.RuleConditionPlugin):
     REQUIRED_PARAMS = set()
+    ALLOW_NONE = True
 
     def check(self, node_info, field, params, **kwargs):
         return field in ('', None, [], {})

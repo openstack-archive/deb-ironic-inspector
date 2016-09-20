@@ -14,10 +14,11 @@
 import socket
 
 from ironicclient import client
-from keystoneclient import client as keystone_client
+from ironicclient import exceptions as ironic_exc
 from oslo_config import cfg
 
 from ironic_inspector.common.i18n import _
+from ironic_inspector.common import keystone
 from ironic_inspector import utils
 
 CONF = cfg.CONF
@@ -32,35 +33,50 @@ DEFAULT_IRONIC_API_VERSION = '1.11'
 IRONIC_GROUP = 'ironic'
 
 IRONIC_OPTS = [
+    cfg.StrOpt('os_region',
+               help='Keystone region used to get Ironic endpoints.'),
     cfg.StrOpt('os_auth_url',
                default='',
                help='Keystone authentication endpoint for accessing Ironic '
-                    'API. Use [keystone_authtoken]/auth_uri for keystone '
-                    'authentication.',
-               deprecated_group='discoverd'),
+                    'API. Use [keystone_authtoken] section for keystone '
+                    'token validation.',
+               deprecated_group='discoverd',
+               deprecated_for_removal=True,
+               deprecated_reason='Use options presented by configured '
+                                 'keystone auth plugin.'),
     cfg.StrOpt('os_username',
                default='',
                help='User name for accessing Ironic API. '
-                    'Use [keystone_authtoken]/admin_user for keystone '
-                    'authentication.',
-               deprecated_group='discoverd'),
+                    'Use [keystone_authtoken] section for keystone '
+                    'token validation.',
+               deprecated_group='discoverd',
+               deprecated_for_removal=True,
+               deprecated_reason='Use options presented by configured '
+                                 'keystone auth plugin.'),
     cfg.StrOpt('os_password',
                default='',
                help='Password for accessing Ironic API. '
-                    'Use [keystone_authtoken]/admin_password for keystone '
-                    'authentication.',
+                    'Use [keystone_authtoken] section for keystone '
+                    'token validation.',
                secret=True,
-               deprecated_group='discoverd'),
+               deprecated_group='discoverd',
+               deprecated_for_removal=True,
+               deprecated_reason='Use options presented by configured '
+                                 'keystone auth plugin.'),
     cfg.StrOpt('os_tenant_name',
                default='',
                help='Tenant name for accessing Ironic API. '
-                    'Use [keystone_authtoken]/admin_tenant_name for keystone '
-                    'authentication.',
-               deprecated_group='discoverd'),
+                    'Use [keystone_authtoken] section for keystone '
+                    'token validation.',
+               deprecated_group='discoverd',
+               deprecated_for_removal=True,
+               deprecated_reason='Use options presented by configured '
+                                 'keystone auth plugin.'),
     cfg.StrOpt('identity_uri',
                default='',
                help='Keystone admin endpoint. '
-                    'DEPRECATED: use [keystone_authtoken]/identity_uri.',
+                    'DEPRECATED: Use [keystone_authtoken] section for '
+                    'keystone token validation.',
                deprecated_group='discoverd',
                deprecated_for_removal=True),
     cfg.StrOpt('auth_strategy',
@@ -90,6 +106,32 @@ IRONIC_OPTS = [
 
 
 CONF.register_opts(IRONIC_OPTS, group=IRONIC_GROUP)
+keystone.register_auth_opts(IRONIC_GROUP)
+
+IRONIC_SESSION = None
+LEGACY_MAP = {
+    'auth_url': 'os_auth_url',
+    'username': 'os_username',
+    'password': 'os_password',
+    'tenant_name': 'os_tenant_name'
+}
+
+
+class NotFound(utils.Error):
+    """Node not found in Ironic."""
+
+    def __init__(self, node_ident, code=404, *args, **kwargs):
+        msg = _('Node %s was not found in Ironic') % node_ident
+        super(NotFound, self).__init__(msg, code, *args, **kwargs)
+
+
+def reset_ironic_session():
+    """Reset the global session variable.
+
+    Mostly useful for unit tests.
+    """
+    global IRONIC_SESSION
+    IRONIC_SESSION = None
 
 
 def get_ipmi_address(node):
@@ -114,33 +156,28 @@ def get_client(token=None,
     """Get Ironic client instance."""
     # NOTE: To support standalone ironic without keystone
     if CONF.ironic.auth_strategy == 'noauth':
-        args = {'os_auth_token': 'noauth',
-                'ironic_url': CONF.ironic.ironic_url}
-    elif token is None:
-        args = {'os_password': CONF.ironic.os_password,
-                'os_username': CONF.ironic.os_username,
-                'os_auth_url': CONF.ironic.os_auth_url,
-                'os_tenant_name': CONF.ironic.os_tenant_name,
-                'os_service_type': CONF.ironic.os_service_type,
-                'os_endpoint_type': CONF.ironic.os_endpoint_type}
+        args = {'token': 'noauth',
+                'endpoint': CONF.ironic.ironic_url}
     else:
-        keystone_creds = {'password': CONF.ironic.os_password,
-                          'username': CONF.ironic.os_username,
-                          'auth_url': CONF.ironic.os_auth_url,
-                          'tenant_name': CONF.ironic.os_tenant_name}
-        keystone = keystone_client.Client(**keystone_creds)
-        # FIXME(sambetts): Work around for Bug 1539839 as client.authenticate
-        # is not called.
-        keystone.authenticate()
-        ironic_url = keystone.service_catalog.url_for(
-            service_type=CONF.ironic.os_service_type,
-            endpoint_type=CONF.ironic.os_endpoint_type)
-        args = {'os_auth_token': token,
-                'ironic_url': ironic_url}
+        global IRONIC_SESSION
+        if not IRONIC_SESSION:
+            IRONIC_SESSION = keystone.get_session(
+                IRONIC_GROUP, legacy_mapping=LEGACY_MAP)
+        if token is None:
+            args = {'session': IRONIC_SESSION,
+                    'region_name': CONF.ironic.os_region}
+        else:
+            ironic_url = IRONIC_SESSION.get_endpoint(
+                service_type=CONF.ironic.os_service_type,
+                endpoint_type=CONF.ironic.os_endpoint_type,
+                region_name=CONF.ironic.os_region
+            )
+            args = {'token': token,
+                    'endpoint': ironic_url}
     args['os_ironic_api_version'] = api_version
     args['max_retries'] = CONF.ironic.max_retries
     args['retry_interval'] = CONF.ironic.retry_interval
-    return client.get_client(1, **args)
+    return client.Client(1, **args)
 
 
 def check_provision_state(node, with_credentials=False):
@@ -172,5 +209,24 @@ def dict_to_capabilities(caps_dict):
                      if value is not None])
 
 
+def get_node(node_id, ironic=None, **kwargs):
+    """Get a node from Ironic.
+
+    :param node_id: node UUID or name.
+    :param ironic: ironic client instance.
+    :param kwargs: arguments to pass to Ironic client.
+    :raises: Error on failure
+    """
+    ironic = ironic if ironic is not None else get_client()
+
+    try:
+        return ironic.node.get(node_id, **kwargs)
+    except ironic_exc.NotFound:
+        raise NotFound(node_id)
+    except ironic_exc.HttpError as exc:
+        raise utils.Error(_("Cannot get node %(node)s: %(exc)s") %
+                          {'node': node_id, 'exc': exc})
+
+
 def list_opts():
-    return [(IRONIC_GROUP, IRONIC_OPTS)]
+    return keystone.add_auth_options(IRONIC_OPTS, IRONIC_GROUP)

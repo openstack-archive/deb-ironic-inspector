@@ -15,6 +15,7 @@ import eventlet
 eventlet.monkey_patch()
 
 import contextlib
+import copy
 import json
 import os
 import shutil
@@ -23,10 +24,11 @@ import unittest
 
 import mock
 from oslo_config import cfg
-from oslo_utils import units
+from oslo_config import fixture as config_fixture
 import requests
 
 from ironic_inspector.common import ironic as ir_utils
+from ironic_inspector.common import swift
 from ironic_inspector import dbsync
 from ironic_inspector import main
 from ironic_inspector import rules
@@ -52,6 +54,23 @@ connection = sqlite:///%(db_file)s
 
 
 DEFAULT_SLEEP = 2
+TEST_CONF_FILE = None
+
+
+def get_test_conf_file():
+    global TEST_CONF_FILE
+    if not TEST_CONF_FILE:
+        d = tempfile.mkdtemp()
+        TEST_CONF_FILE = os.path.join(d, 'test.conf')
+        db_file = os.path.join(d, 'test.db')
+        with open(TEST_CONF_FILE, 'wb') as fp:
+            content = CONF % {'db_file': db_file}
+            fp.write(content.encode('utf-8'))
+    return TEST_CONF_FILE
+
+
+def get_error(response):
+    return response.json()['error']['message']
 
 
 class Base(base.NodeTest):
@@ -68,61 +87,11 @@ class Base(base.NodeTest):
         self.cli.node.update.return_value = self.node
         self.cli.node.list.return_value = [self.node]
 
-        # https://github.com/openstack/ironic-inspector/blob/master/HTTP-API.rst  # noqa
-        self.data = {
-            'boot_interface': '01-' + self.macs[0].replace(':', '-'),
-            'inventory': {
-                'interfaces': [
-                    {'name': 'eth1', 'mac_address': self.macs[0],
-                     'ipv4_address': '1.2.1.2'},
-                    {'name': 'eth2', 'mac_address': '12:12:21:12:21:12'},
-                    {'name': 'eth3', 'mac_address': self.macs[1],
-                     'ipv4_address': '1.2.1.1'},
-                ],
-                'disks': [
-                    {'name': '/dev/sda', 'model': 'Big Data Disk',
-                     'size': 1000 * units.Gi},
-                    {'name': '/dev/sdb', 'model': 'Small OS Disk',
-                     'size': 20 * units.Gi},
-                ],
-                'cpu': {
-                    'count': 4,
-                    'architecture': 'x86_64'
-                },
-                'memory': {
-                    'physical_mb': 12288
-                },
-                'bmc_address': self.bmc_address
-            },
-            'root_disk': {'name': '/dev/sda', 'model': 'Big Data Disk',
-                          'size': 1000 * units.Gi,
-                          'wwn': None},
-        }
-        self.data_old_ramdisk = {
-            'cpus': 4,
-            'cpu_arch': 'x86_64',
-            'memory_mb': 12288,
-            'local_gb': 464,
-            'interfaces': {
-                'eth1': {'mac': self.macs[0], 'ip': '1.2.1.2'},
-                'eth2': {'mac': '12:12:21:12:21:12'},
-                'eth3': {'mac': self.macs[1], 'ip': '1.2.1.1'},
-            },
-            'boot_interface': '01-' + self.macs[0].replace(':', '-'),
-            'ipmi_address': self.bmc_address,
-        }
-
         self.patch = [
             {'op': 'add', 'path': '/properties/cpus', 'value': '4'},
             {'path': '/properties/cpu_arch', 'value': 'x86_64', 'op': 'add'},
             {'op': 'add', 'path': '/properties/memory_mb', 'value': '12288'},
             {'path': '/properties/local_gb', 'value': '999', 'op': 'add'}
-        ]
-        self.patch_old_ramdisk = [
-            {'op': 'add', 'path': '/properties/cpus', 'value': '4'},
-            {'path': '/properties/cpu_arch', 'value': 'x86_64', 'op': 'add'},
-            {'op': 'add', 'path': '/properties/memory_mb', 'value': '12288'},
-            {'path': '/properties/local_gb', 'value': '464', 'op': 'add'}
         ]
         self.patch_root_hints = [
             {'op': 'add', 'path': '/properties/cpus', 'value': '4'},
@@ -132,6 +101,10 @@ class Base(base.NodeTest):
         ]
 
         self.node.power_state = 'power off'
+
+        self.cfg = self.useFixture(config_fixture.Config())
+        conf_file = get_test_conf_file()
+        self.cfg.set_config_files([conf_file])
 
     def call(self, method, endpoint, data=None, expect_error=None,
              api_version=None):
@@ -146,7 +119,11 @@ class Base(base.NodeTest):
         if expect_error:
             self.assertEqual(expect_error, res.status_code)
         else:
-            res.raise_for_status()
+            if res.status_code >= 400:
+                msg = ('%(meth)s %(url)s failed with code %(code)s: %(msg)s' %
+                       {'meth': method.upper(), 'url': endpoint,
+                        'code': res.status_code, 'msg': get_error(res)})
+                raise AssertionError(msg)
         return res
 
     def call_introspect(self, uuid, new_ipmi_username=None,
@@ -163,6 +140,10 @@ class Base(base.NodeTest):
 
     def call_abort_introspect(self, uuid):
         return self.call('post', '/v1/introspection/%s/abort' % uuid)
+
+    def call_reapply(self, uuid):
+        return self.call('post', '/v1/introspection/%s/data/unprocessed' %
+                         uuid)
 
     def call_continue(self, data):
         return self.call('post', '/v1/continue', data=data).json()
@@ -199,27 +180,6 @@ class Test(Base):
 
         self.cli.node.update.assert_called_once_with(self.uuid, mock.ANY)
         self.assertCalledWithPatch(self.patch, self.cli.node.update)
-        self.cli.port.create.assert_called_once_with(
-            node_uuid=self.uuid, address='11:22:33:44:55:66')
-
-        status = self.call_get_status(self.uuid)
-        self.assertEqual({'finished': True, 'error': None}, status)
-
-    def test_old_ramdisk(self):
-        self.call_introspect(self.uuid)
-        eventlet.greenthread.sleep(DEFAULT_SLEEP)
-        self.cli.node.set_power_state.assert_called_once_with(self.uuid,
-                                                              'reboot')
-
-        status = self.call_get_status(self.uuid)
-        self.assertEqual({'finished': False, 'error': None}, status)
-
-        res = self.call_continue(self.data_old_ramdisk)
-        self.assertEqual({'uuid': self.uuid}, res)
-        eventlet.greenthread.sleep(DEFAULT_SLEEP)
-
-        self.assertCalledWithPatch(self.patch_old_ramdisk,
-                                   self.cli.node.update)
         self.cli.port.create.assert_called_once_with(
             node_uuid=self.uuid, address='11:22:33:44:55:66')
 
@@ -314,6 +274,7 @@ class Test(Base):
                     {'field': 'inventory.interfaces[*].ipv4_address',
                      'op': 'contains', 'value': r'127\.0\.0\.1',
                      'invert': True, 'multiple': 'all'},
+                    {'field': 'i.do.not.exist', 'op': 'is-empty'},
                 ],
                 'actions': [
                     {'action': 'set-attribute', 'path': '/extra/foo',
@@ -432,17 +393,72 @@ class Test(Base):
         # after releasing the node lock
         self.call('post', '/v1/continue', self.data, expect_error=400)
 
+    @mock.patch.object(swift, 'store_introspection_data', autospec=True)
+    @mock.patch.object(swift, 'get_introspection_data', autospec=True)
+    def test_stored_data_processing(self, get_mock, store_mock):
+        cfg.CONF.set_override('store_data', 'swift', 'processing')
+
+        # ramdisk data copy
+        # please mind the data is changed during processing
+        ramdisk_data = json.dumps(copy.deepcopy(self.data))
+        get_mock.return_value = ramdisk_data
+
+        self.call_introspect(self.uuid)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+        self.cli.node.set_power_state.assert_called_once_with(self.uuid,
+                                                              'reboot')
+
+        res = self.call_continue(self.data)
+        self.assertEqual({'uuid': self.uuid}, res)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+
+        status = self.call_get_status(self.uuid)
+        self.assertEqual({'finished': True, 'error': None}, status)
+
+        res = self.call_reapply(self.uuid)
+        self.assertEqual(202, res.status_code)
+        self.assertEqual('', res.text)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+
+        # reapply request data
+        get_mock.assert_called_once_with(self.uuid,
+                                         suffix='UNPROCESSED')
+
+        # store ramdisk data, store processing result data, store
+        # reapply processing result data; the ordering isn't
+        # guaranteed as store ramdisk data runs in a background
+        # thread; hower, last call has to always be reapply processing
+        # result data
+        store_ramdisk_call = mock.call(mock.ANY, self.uuid,
+                                       suffix='UNPROCESSED')
+        store_processing_call = mock.call(mock.ANY, self.uuid,
+                                          suffix=None)
+        self.assertEqual(3, len(store_mock.call_args_list))
+        self.assertIn(store_ramdisk_call,
+                      store_mock.call_args_list[0:2])
+        self.assertIn(store_processing_call,
+                      store_mock.call_args_list[0:2])
+        self.assertEqual(store_processing_call,
+                         store_mock.call_args_list[2])
+
+        # second reapply call
+        get_mock.return_value = ramdisk_data
+        res = self.call_reapply(self.uuid)
+        self.assertEqual(202, res.status_code)
+        self.assertEqual('', res.text)
+        eventlet.greenthread.sleep(DEFAULT_SLEEP)
+
+        # reapply saves the result
+        self.assertEqual(4, len(store_mock.call_args_list))
+        self.assertEqual(store_processing_call,
+                         store_mock.call_args_list[-1])
+
 
 @contextlib.contextmanager
 def mocked_server():
     d = tempfile.mkdtemp()
     try:
-        conf_file = os.path.join(d, 'test.conf')
-        db_file = os.path.join(d, 'test.db')
-        with open(conf_file, 'wb') as fp:
-            content = CONF % {'db_file': db_file}
-            fp.write(content.encode('utf-8'))
-
+        conf_file = get_test_conf_file()
         with mock.patch.object(ir_utils, 'get_client'):
             dbsync.main(args=['--config-file', conf_file, 'upgrade'])
 
