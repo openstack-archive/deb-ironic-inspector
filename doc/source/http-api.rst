@@ -9,9 +9,9 @@ can be changed in configuration. Protocol is JSON over HTTP.
 Start Introspection
 ~~~~~~~~~~~~~~~~~~~
 
-``POST /v1/introspection/<UUID>`` initiate hardware introspection for node
-``<UUID>``. All power management configuration for this node needs to be done
-prior to calling the endpoint (except when :ref:`setting-ipmi-creds`).
+``POST /v1/introspection/<Node ID>`` initiate hardware introspection for node
+``<Node ID>``. All power management configuration for this node needs to be
+done prior to calling the endpoint (except when :ref:`setting-ipmi-creds`).
 
 Requires X-Auth-Token header with Keystone token for authentication.
 
@@ -36,7 +36,7 @@ Response:
 Get Introspection Status
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-``GET /v1/introspection/<UUID>`` get hardware introspection status.
+``GET /v1/introspection/<Node ID>`` get hardware introspection status.
 
 Requires X-Auth-Token header with Keystone token for authentication.
 
@@ -58,7 +58,7 @@ Response body: JSON dictionary with keys:
 Abort Running Introspection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``POST /v1/introspection/<UUID>/abort`` abort running introspection.
+``POST /v1/introspection/<Node ID>/abort`` abort running introspection.
 
 Requires X-Auth-Token header with Keystone token for authentication.
 
@@ -74,7 +74,7 @@ Response:
 Get Introspection Data
 ~~~~~~~~~~~~~~~~~~~~~~
 
-``GET /v1/introspection/<UUID>/data`` get stored data from successful
+``GET /v1/introspection/<Node ID>/data`` get stored data from successful
 introspection.
 
 Requires X-Auth-Token header with Keystone token for authentication.
@@ -92,6 +92,25 @@ Response body: JSON dictionary with introspection data
     We do not provide any backward compatibility guarantees regarding the
     format and contents of the stored data. Notably, it depends on the ramdisk
     used and plugins enabled both in the ramdisk and in inspector itself.
+
+Reapply introspection on stored data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``POST /v1/introspection/<Node ID>/data/unprocessed`` to trigger
+introspection on stored unprocessed data.  No data is allowed to be
+sent along with the request.
+
+Requires X-Auth-Token header with Keystone token for authentication.
+Requires enabling Swift store in processing section of the
+configuration file.
+
+Response:
+
+* 202 - accepted
+* 400 - bad request or store not configured
+* 401, 403 - missing or invalid authentication
+* 404 - node not found for Node ID
+* 409 - inspector locked node for processing
 
 Introspection Rules
 ~~~~~~~~~~~~~~~~~~~
@@ -112,7 +131,8 @@ authentication.
 
   Response
 
-  * 200 - OK
+  * 200 - OK for API version < 1.6
+  * 201 - OK for API version 1.6 and higher
   * 400 - bad request
 
   Response body: JSON dictionary with introspection rule representation (the
@@ -198,22 +218,6 @@ Optionally the following keys might be provided:
 
 * ``logs`` base64-encoded logs from the ramdisk.
 
-The following keys are supported for backward compatibility with the old
-bash-based ramdisk, when ``inventory`` is not provided:
-
-* ``cpus`` number of CPU
-
-* ``cpu_arch`` architecture of the CPU
-
-* ``memory_mb`` RAM in MiB
-
-* ``local_gb`` hard drive size in GiB
-
-* ``ipmi_address`` IP address of BMC, may be missing on VM
-
-* ``block_devices`` block devices information for the ``raid_device`` plugin,
-  dictionary with one key: ``serials`` list of serial numbers of block devices.
-
 .. note::
     This list highly depends on enabled plugins, provided above are
     expected keys for the default set of plugins. See :ref:`plugins`
@@ -279,6 +283,10 @@ major version and is always ``1`` for now, ``Y`` is a minor version.
   ``X-OpenStack-Ironic-Inspector-API-Maximum-Version`` headers with minimum
   and maximum API versions supported by the server.
 
+  .. note::
+     Maximum is server API version used by default.
+
+
 API Discovery
 ~~~~~~~~~~~~~
 
@@ -323,3 +331,6 @@ Version History
 * **1.1** adds endpoint to retrieve stored introspection data.
 * **1.2** endpoints for manipulating introspection rules.
 * **1.3** endpoint for canceling running introspection
+* **1.4** endpoint for reapplying the introspection over stored data.
+* **1.5** support for Ironic node names.
+* **1.6** endpoint for rules creating returns 201 instead of 200 on success.

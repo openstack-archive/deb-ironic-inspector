@@ -198,3 +198,29 @@ def get_auth_strategy():
     if CONF.authenticate is not None:
         return 'keystone' if CONF.authenticate else 'noauth'
     return CONF.auth_strategy
+
+
+def get_valid_macs(data):
+    """Get a list of valid MAC's from the introspection data."""
+    return [m['mac']
+            for m in data.get('all_interfaces', {}).values()
+            if m.get('mac')]
+
+
+_INVENTORY_MANDATORY_KEYS = ('disks', 'memory', 'cpu', 'interfaces')
+
+
+def get_inventory(data, node_info=None):
+    """Get and validate the hardware inventory from introspection data."""
+    inventory = data.get('inventory')
+    # TODO(dtantsur): validate inventory using JSON schema
+    if not inventory:
+        raise Error(_('Hardware inventory is empty or missing'),
+                    data=data, node_info=node_info)
+
+    for key in _INVENTORY_MANDATORY_KEYS:
+        if not inventory.get(key):
+            raise Error(_('Invalid hardware inventory: %s key is missing '
+                          'or empty') % key, data=data, node_info=node_info)
+
+    return inventory

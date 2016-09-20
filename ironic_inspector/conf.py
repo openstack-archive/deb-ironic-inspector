@@ -79,7 +79,7 @@ PROCESSING_OPTS = [
                 deprecated_group='discoverd'),
     cfg.StrOpt('default_processing_hooks',
                default='ramdisk_error,root_disk_selection,scheduler,'
-                       'validate_interfaces',
+                       'validate_interfaces,capabilities',
                help='Comma-separated list of default hooks for processing '
                     'pipeline. Hook \'scheduler\' updates the node with the '
                     'minimum properties required by the Nova scheduler. '
@@ -129,6 +129,17 @@ PROCESSING_OPTS = [
                 default=True,
                 help='Whether to log node BMC address with every message '
                      'during processing.'),
+    cfg.StrOpt('ramdisk_logs_filename_format',
+               default='{uuid}_{dt:%Y%m%d-%H%M%S.%f}.tar.gz',
+               help='File name template for storing ramdisk logs. The '
+                    'following replacements can be used: '
+                    '{uuid} - node UUID or "unknown", '
+                    '{bmc} - node BMC address or "unknown", '
+                    '{dt} - current UTC date and time, '
+                    '{mac} - PXE booting MAC or "unknown".'),
+    cfg.BoolOpt('power_off',
+                default=True,
+                help='Whether to power off a node after introspection.'),
 ]
 
 
@@ -146,10 +157,10 @@ SERVICE_OPTS = [
                default='0.0.0.0',
                help='IP to listen on.',
                deprecated_group='discoverd'),
-    cfg.IntOpt('listen_port',
-               default=5050,
-               help='Port to listen on.',
-               deprecated_group='discoverd'),
+    cfg.PortOpt('listen_port',
+                default=5050,
+                help='Port to listen on.',
+                deprecated_group='discoverd'),
     cfg.StrOpt('auth_strategy',
                default='keystone',
                choices=('keystone', 'noauth'),

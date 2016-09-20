@@ -22,6 +22,7 @@ from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_db import exception as db_exc
 from oslo_utils import excutils
+from oslo_utils import uuidutils
 from sqlalchemy import text
 
 from ironic_inspector import db
@@ -201,11 +202,11 @@ class NodeInfo(object):
             self._attributes = None
 
     @classmethod
-    def from_row(cls, row, ironic=None, lock=None):
+    def from_row(cls, row, ironic=None, lock=None, node=None):
         """Construct NodeInfo from a database row."""
         fields = {key: row[key]
                   for key in ('uuid', 'started_at', 'finished_at', 'error')}
-        return cls(ironic=ironic, lock=lock, **fields)
+        return cls(ironic=ironic, lock=lock, node=node, **fields)
 
     def invalidate_cache(self):
         """Clear all cached info, so that it's reloaded next time."""
@@ -215,25 +216,29 @@ class NodeInfo(object):
         self._attributes = None
         self._ironic = None
 
-    def node(self):
+    def node(self, ironic=None):
         """Get Ironic node object associated with the cached node record."""
         if self._node is None:
-            self._node = self.ironic.node.get(self.uuid)
+            ironic = ironic or self.ironic
+            self._node = ir_utils.get_node(self.uuid, ironic=ironic)
         return self._node
 
-    def create_ports(self, macs):
+    def create_ports(self, macs, ironic=None):
         """Create one or several ports for this node.
 
         A warning is issued if port already exists on a node.
         """
+        existing_macs = []
         for mac in macs:
             if mac not in self.ports():
-                self._create_port(mac)
+                self._create_port(mac, ironic)
             else:
-                LOG.warning(_LW('Port %s already exists, skipping'),
-                            mac, node_info=self)
+                existing_macs.append(mac)
+        if existing_macs:
+            LOG.warning(_LW('Did not create ports %s as they already exist'),
+                        existing_macs, node_info=self)
 
-    def ports(self):
+    def ports(self, ironic=None):
         """Get Ironic port objects associated with the cached node record.
 
         This value is cached as well, use invalidate_cache() to clean.
@@ -241,13 +246,15 @@ class NodeInfo(object):
         :return: dict MAC -> port object
         """
         if self._ports is None:
+            ironic = ironic or self.ironic
             self._ports = {p.address: p for p in
-                           self.ironic.node.list_ports(self.uuid, limit=0)}
+                           ironic.node.list_ports(self.uuid, limit=0)}
         return self._ports
 
-    def _create_port(self, mac):
+    def _create_port(self, mac, ironic=None):
+        ironic = ironic or self.ironic
         try:
-            port = self.ironic.port.create(node_uuid=self.uuid, address=mac)
+            port = ironic.port.create(node_uuid=self.uuid, address=mac)
         except exceptions.Conflict:
             LOG.warning(_LW('Port %s already exists, skipping'),
                         mac, node_info=self)
@@ -257,14 +264,16 @@ class NodeInfo(object):
         else:
             self._ports[mac] = port
 
-    def patch(self, patches):
+    def patch(self, patches, ironic=None):
         """Apply JSON patches to a node.
 
         Refreshes cached node instance.
 
         :param patches: JSON patches to apply
+        :param ironic: Ironic client to use instead of self.ironic
         :raises: ironicclient exceptions
         """
+        ironic = ironic or self.ironic
         # NOTE(aarefiev): support path w/o ahead forward slash
         # as Ironic cli does
         for patch in patches:
@@ -272,14 +281,16 @@ class NodeInfo(object):
                 patch['path'] = '/' + patch['path']
 
         LOG.debug('Updating node with patches %s', patches, node_info=self)
-        self._node = self.ironic.node.update(self.uuid, patches)
+        self._node = ironic.node.update(self.uuid, patches)
 
-    def patch_port(self, port, patches):
+    def patch_port(self, port, patches, ironic=None):
         """Apply JSON patches to a port.
 
         :param port: port object or its MAC
         :param patches: JSON patches to apply
+        :param ironic: Ironic client to use instead of self.ironic
         """
+        ironic = ironic or self.ironic
         ports = self.ports()
         if isinstance(port, str):
             port = ports[port]
@@ -287,39 +298,45 @@ class NodeInfo(object):
         LOG.debug('Updating port %(mac)s with patches %(patches)s',
                   {'mac': port.address, 'patches': patches},
                   node_info=self)
-        new_port = self.ironic.port.update(port.uuid, patches)
+        new_port = ironic.port.update(port.uuid, patches)
         ports[port.address] = new_port
 
-    def update_properties(self, **props):
+    def update_properties(self, ironic=None, **props):
         """Update properties on a node.
 
         :param props: properties to update
+        :param ironic: Ironic client to use instead of self.ironic
         """
+        ironic = ironic or self.ironic
         patches = [{'op': 'add', 'path': '/properties/%s' % k, 'value': v}
                    for k, v in props.items()]
-        self.patch(patches)
+        self.patch(patches, ironic)
 
-    def update_capabilities(self, **caps):
+    def update_capabilities(self, ironic=None, **caps):
         """Update capabilities on a node.
 
-        :param props: capabilities to update
+        :param caps: capabilities to update
+        :param ironic: Ironic client to use instead of self.ironic
         """
         existing = ir_utils.capabilities_to_dict(
             self.node().properties.get('capabilities'))
         existing.update(caps)
         self.update_properties(
+            ironic=ironic,
             capabilities=ir_utils.dict_to_capabilities(existing))
 
-    def delete_port(self, port):
+    def delete_port(self, port, ironic=None):
         """Delete port.
 
         :param port: port object or its MAC
+        :param ironic: Ironic client to use instead of self.ironic
         """
+        ironic = ironic or self.ironic
         ports = self.ports()
         if isinstance(port, str):
             port = ports[port]
 
-        self.ironic.port.delete(port.uuid)
+        ironic.port.delete(port.uuid)
         del ports[port.address]
 
     def get_by_path(self, path):
@@ -349,6 +366,7 @@ class NodeInfo(object):
         :raises: KeyError if value is not found and default is not set
         :raises: everything that patch() may raise
         """
+        ironic = kwargs.pop("ironic", None) or self.ironic
         try:
             value = self.get_by_path(path)
             op = 'replace'
@@ -362,7 +380,7 @@ class NodeInfo(object):
         ref_value = copy.deepcopy(value)
         value = func(value)
         if value != ref_value:
-            self.patch([{'op': op, 'path': path, 'value': value}])
+            self.patch([{'op': op, 'path': path, 'value': value}], ironic)
 
 
 def add_node(uuid, **attributes):
@@ -438,14 +456,21 @@ def _list_node_uuids():
     return {x.uuid for x in db.model_query(db.Node.uuid)}
 
 
-def get_node(uuid, ironic=None, locked=False):
-    """Get node from cache by it's UUID.
+def get_node(node_id, ironic=None, locked=False):
+    """Get node from cache.
 
-    :param uuid: node UUID.
+    :param node_id: node UUID or name.
     :param ironic: optional ironic client instance
     :param locked: if True, get a lock on node before fetching its data
     :returns: structure NodeInfo.
     """
+    if uuidutils.is_uuid_like(node_id):
+        node = None
+        uuid = node_id
+    else:
+        node = ir_utils.get_node(node_id, ironic=ironic)
+        uuid = node.uuid
+
     if locked:
         lock = _get_lock(uuid)
         lock.acquire()
@@ -457,7 +482,7 @@ def get_node(uuid, ironic=None, locked=False):
         if row is None:
             raise utils.Error(_('Could not find node %s in cache') % uuid,
                               code=404)
-        return NodeInfo.from_row(row, ironic=ironic, lock=lock)
+        return NodeInfo.from_row(row, ironic=ironic, lock=lock, node=node)
     except Exception:
         with excutils.save_and_reraise_exception():
             if lock is not None:
@@ -578,7 +603,7 @@ def clean_up():
     return uuids
 
 
-def create_node(driver,  ironic=None, **attributes):
+def create_node(driver, ironic=None, **attributes):
     """Create ironic node and cache it.
 
     * Create new node in ironic.

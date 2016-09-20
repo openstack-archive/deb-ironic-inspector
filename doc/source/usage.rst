@@ -79,8 +79,8 @@ Starting with the Mitaka release, you can also apply conditions to ironic node
 field. Prefix field with schema (``data://`` or ``node://``) to distinguish
 between values from introspection data and node. Both schemes use JSON path::
 
-    {'field': 'node://property.path', 'op': 'eq', 'value': 'val'}
-    {'field': 'data://introspection.path', 'op': 'eq', 'value': 'val'}
+    {"field": "node://property.path", "op": "eq", "value": "val"}
+    {"field": "data://introspection.path", "op": "eq", "value": "val"}
 
 if scheme (node or data) is missing, condition compares data with
 introspection data.
@@ -127,8 +127,8 @@ Starting from Mitaka release, ``value`` field in actions supports fetching data
 from introspection, it's using `python string formatting notation
 <https://docs.python.org/2/library/string.html#formatspec>`_ ::
 
-        {'action': 'set-attribute', 'path': '/driver_info/ipmi_address',
-                   'value': '{data[inventory][bmc_address]}'}
+    {"action": "set-attribute", "path": "/driver_info/ipmi_address",
+     "value": "{data[inventory][bmc_address]}"}
 
 .. _setting-ipmi-creds:
 
@@ -184,20 +184,27 @@ introspection data. Note that order does matter in this option.
 These are plugins that are enabled by default and should not be disabled,
 unless you understand what you're doing:
 
-``ramdisk_error``
-    reports error, if ``error`` field is set by the ramdisk, also optionally
-    stores logs from ``logs`` field, see :ref:`api` for details.
 ``scheduler``
     validates and updates basic hardware scheduling properties: CPU number and
     architecture, memory and disk size.
 ``validate_interfaces``
     validates network interfaces information.
 
+The following plugins are enabled by default, but can be disabled if not
+needed:
+
+``ramdisk_error``
+    reports error, if ``error`` field is set by the ramdisk, also optionally
+    stores logs from ``logs`` field, see :ref:`api` for details.
+``capabilities``
+    detect node capabilities: CPU, boot mode, etc. See `Capabilities
+    Detection`_ for more details.
+
 Here are some plugins that can be additionally enabled:
 
 ``example``
     example plugin logging it's input and output.
-``raid_device`` (deprecated name ``root_device_hint``)
+``raid_device``
     gathers block devices from ramdisk and exposes root device in multiple
     runs.
 ``extra_hardware``
@@ -207,6 +214,12 @@ Here are some plugins that can be additionally enabled:
     then the new format will be stored in the 'extra' key. The 'data' key is
     then deleted from the introspection data, as unless converted it's assumed
     unusable by introspection rules.
+``local_link_connection``
+    Processes LLDP data returned from inspection specifically looking for the
+    port ID and chassis ID, if found it configures the local link connection
+    information on the nodes Ironic ports with that data. To enable LLDP in the
+    inventory from IPA ``ipa-collect-lldp=1`` should be passed as a kernel
+    parameter to the IPA ramdisk.
 
 Refer to :ref:`contributing_link` for information on how to write your
 own plugin.
@@ -241,40 +254,131 @@ see :ref:`rules`.
 A rule to set a node's Ironic driver to the ``agent_ipmitool`` driver and
 populate the required driver_info for that driver would look like::
 
-    "description": "Set IPMI driver_info if no credentials",
-    "actions": [
-        {'action': 'set-attribute', 'path': 'driver', 'value': 'agent_ipmitool'},
-        {'action': 'set-attribute', 'path': 'driver_info/ipmi_username',
-         'value': 'username'},
-        {'action': 'set-attribute', 'path': 'driver_info/ipmi_password',
-         'value': 'password'}
-    ]
-    "conditions": [
-        {'op': 'is-empty', 'field': 'node://driver_info.ipmi_password'},
-        {'op': 'is-empty', 'field': 'node://driver_info.ipmi_username'}
-    ]
-
-    "description": "Set deploy info if not already set on node",
-    "actions": [
-        {'action': 'set-attribute', 'path': 'driver_info/deploy_kernel',
-         'value': '<glance uuid>'},
-        {'action': 'set-attribute', 'path': 'driver_info/deploy_ramdisk',
-         'value': '<glance uuid>'},
-    ]
-    "conditions": [
-        {'op': 'is-empty', 'field': 'node://driver_info.deploy_ramdisk'},
-        {'op': 'is-empty', 'field': 'node://driver_info.deploy_kernel'}
-    ]
+    [{
+        "description": "Set IPMI driver_info if no credentials",
+        "actions": [
+            {"action": "set-attribute", "path": "driver", "value": "agent_ipmitool"},
+            {"action": "set-attribute", "path": "driver_info/ipmi_username",
+             "value": "username"},
+            {"action": "set-attribute", "path": "driver_info/ipmi_password",
+             "value": "password"}
+        ],
+        "conditions": [
+            {"op": "is-empty", "field": "node://driver_info.ipmi_password"},
+            {"op": "is-empty", "field": "node://driver_info.ipmi_username"}
+        ]
+    },{
+        "description": "Set deploy info if not already set on node",
+        "actions": [
+            {"action": "set-attribute", "path": "driver_info/deploy_kernel",
+             "value": "<glance uuid>"},
+            {"action": "set-attribute", "path": "driver_info/deploy_ramdisk",
+             "value": "<glance uuid>"}
+        ],
+        "conditions": [
+            {"op": "is-empty", "field": "node://driver_info.deploy_ramdisk"},
+            {"op": "is-empty", "field": "node://driver_info.deploy_kernel"}
+        ]
+    }]
 
 All nodes discovered and enrolled via the ``enroll`` hook, will contain an
 ``auto_discovered`` flag in the introspection data, this flag makes it
 possible to distinguish between manually enrolled nodes and auto-discovered
 nodes in the introspection rules using the rule condition ``eq``::
 
-    "description": "Enroll auto-discovered nodes with fake driver",
-    "actions": [
-        {'action': 'set-attribute', 'path': 'driver', 'value': 'fake'}
-    ]
-    "conditions": [
-        {'op': 'eq', 'field': 'data://auto_discovered', 'value': True}
-    ]
+    {
+        "description": "Enroll auto-discovered nodes with fake driver",
+        "actions": [
+            {"action": "set-attribute", "path": "driver", "value": "fake"}
+        ],
+        "conditions": [
+            {"op": "eq", "field": "data://auto_discovered", "value": true}
+        ]
+    }
+
+Reapplying introspection on stored data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To allow correcting mistakes in introspection rules the API provides
+an entry point that triggers the introspection over stored data.  The
+data to use for processing is kept in Swift separately from the data
+already processed.  Reapplying introspection overwrites processed data
+in the store.  Updating the introspection data through the endpoint
+isn't supported yet.  Following preconditions are checked before
+reapplying introspection:
+
+* no data is being sent along with the request
+* Swift store is configured and enabled
+* introspection data is stored in Swift for the node UUID
+* node record is kept in database for the UUID
+* introspection is not ongoing for the node UUID
+
+Should the preconditions fail an immediate response is given to the
+user:
+
+* ``400`` if the request contained data or in case Swift store is not
+  enabled in configuration
+* ``404`` in case Ironic doesn't keep track of the node UUID
+* ``409`` if an introspection is already ongoing for the node
+
+If the preconditions are met a background task is executed to carry
+out the processing and a ``202 Accepted`` response is returned to the
+endpoint user.  As requested, these steps are performed in the
+background task:
+
+* preprocessing hooks
+* post processing hooks, storing result in Swift
+* introspection rules
+
+These steps are avoided, based on the feature requirements:
+
+* ``node_not_found_hook`` is skipped
+* power operations
+* roll-back actions done by hooks
+
+Limitations:
+
+* IPMI credentials are not updated --- ramdisk not running
+* there's no way to update the unprocessed data atm.
+* the unprocessed data is never cleaned from the store
+* check for stored data presence is performed in background;
+  missing data situation still results in a ``202`` response
+
+Capabilities Detection
+~~~~~~~~~~~~~~~~~~~~~~
+
+Starting with the Newton release, **Ironic Inspector** can optionally discover
+several node capabilities. A recent (Newton or newer) IPA image is required
+for it to work.
+
+Boot mode
+^^^^^^^^^
+
+The current boot mode (BIOS or UEFI) can be detected and recorded as
+``boot_mode`` capability in Ironic. It will make some drivers to change their
+behaviour to account for this capability. Set the ``[capabilities]boot_mode``
+configuration option to ``True`` to enable.
+
+CPU capabilities
+^^^^^^^^^^^^^^^^
+
+Several CPU flags are detected by default and recorded as following
+capabilities:
+
+* ``cpu_aes`` AES instructions.
+
+* ``cpu_vt`` virtualization support.
+
+* ``cpu_txt`` TXT support.
+
+* ``cpu_hugepages`` huge pages (2 MiB) support.
+
+* ``cpu_hugepages_1g`` huge pages (1 GiB) support.
+
+It is possible to define your own rules for detecting CPU capabilities.
+Set the ``[capabilities]cpu_flags`` configuration option to a mapping between
+a CPU flag and a capability, for example::
+
+    cpu_flags = aes:cpu_aes,svm:cpu_vt,vmx:cpu_vt
+
+See the default value of this option for a more detail example.

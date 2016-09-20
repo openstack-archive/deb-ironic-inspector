@@ -1,3 +1,11 @@
+ironic-inspector (4.1.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+  * Using OpenStack's Gerrit as VCS URLs.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 20 Sep 2016 20:01:51 +0200
+
 ironic-inspector (3.2.0-2) unstable; urgency=medium
 
   * Uploading to unstable.

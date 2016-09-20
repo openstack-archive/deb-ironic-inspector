@@ -58,6 +58,10 @@ interpreter of one of supported versions (currently 2.7 and 3.4), use
     a db named 'openstack_citest' with user 'openstack_citest' and password
     'openstack_citest' on localhost.
 
+.. note::
+    Users of Fedora <= 23 will need to run "sudo dnf --releasever=24 update
+    python-virtualenv" to run unit tests
+
 To run the functional tests, use::
 
     tox -e func
@@ -82,39 +86,8 @@ components. There is a plugin for installing **ironic-inspector** on DevStack.
 Example local.conf
 ------------------
 
-Using IPA
-~~~~~~~~~
+.. literalinclude:: ../../devstack/example.local.conf
 
-::
-
-    [[local|localrc]]
-    enable_service ironic ir-api ir-cond
-    disable_service n-net n-novnc
-    enable_service neutron q-svc q-agt q-dhcp q-l3 q-meta
-    enable_service s-proxy s-object s-container s-account
-    disable_service heat h-api h-api-cfn h-api-cw h-eng
-    disable_service cinder c-sch c-api c-vol
-
-    enable_plugin ironic https://github.com/openstack/ironic
-    enable_plugin ironic-inspector https://github.com/openstack/ironic-inspector
-
-    IRONIC_BAREMETAL_BASIC_OPS=True
-    IRONIC_VM_COUNT=2
-    IRONIC_VM_SPECS_RAM=1024
-
-    IRONIC_DEPLOY_DRIVER_ISCSI_WITH_IPA=True
-    IRONIC_BUILD_DEPLOY_RAMDISK=False
-    IRONIC_INSPECTOR_RAMDISK_ELEMENT=ironic-agent
-    IRONIC_INSPECTOR_BUILD_RAMDISK=False
-
-    VIRT_DRIVER=ironic
-
-    LOGDAYS=1
-    LOGFILE=~/logs/stack.sh.log
-    SCREEN_LOGDIR=~/logs/screen
-
-    DEFAULT_INSTANCE_TYPE=baremetal
-    TEMPEST_ALLOW_TENANT_ISOLATION=False
 
 Notes
 -----
@@ -131,52 +104,6 @@ Notes
 
 * This configuration disables Heat and Cinder, adjust it if you need these
   services.
-
-Using simple ramdisk
-~~~~~~~~~~~~~~~~~~~~
-
-.. note::
-    This ramdisk is deprecated and should not be used.
-
-::
-
-    [[local|localrc]]
-    enable_service ironic ir-api ir-cond
-    disable_service n-net n-novnc
-    enable_service neutron q-svc q-agt q-dhcp q-l3 q-meta
-    enable_service s-proxy s-object s-container s-account
-    disable_service heat h-api h-api-cfn h-api-cw h-eng
-    disable_service cinder c-sch c-api c-vol
-
-    enable_plugin ironic https://github.com/openstack/ironic
-    enable_plugin ironic-inspector https://github.com/openstack/ironic-inspector
-
-    IRONIC_BAREMETAL_BASIC_OPS=True
-    IRONIC_VM_COUNT=2
-    IRONIC_VM_SPECS_RAM=1024
-    IRONIC_DEPLOY_FLAVOR="fedora deploy-ironic"
-
-    IRONIC_INSPECTOR_RAMDISK_FLAVOR="fedora ironic-discoverd-ramdisk"
-
-    VIRT_DRIVER=ironic
-
-    LOGDAYS=1
-    LOGFILE=~/logs/stack.sh.log
-    SCREEN_LOGDIR=~/logs/screen
-
-    DEFAULT_INSTANCE_TYPE=baremetal
-    TEMPEST_ALLOW_TENANT_ISOLATION=False
-
-Notes
------
-
-* Replace "fedora" with whatever you have
-
-* You need at least 1G of RAM for VMs, default value of 512 MB won't work
-
-* Before restarting stack.sh::
-
-    rm -rf /opt/stack/ironic-inspector
 
 Test
 ----
