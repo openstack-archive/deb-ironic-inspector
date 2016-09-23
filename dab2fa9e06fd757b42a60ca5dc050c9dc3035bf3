@@ -1,0 +1,8 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 22 Sep 2016 14:45:52 +0000
+Reviewed-on: https://review.openstack.org/374766
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/newton
