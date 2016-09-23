@@ -1,0 +1,9 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 22 Sep 2016 13:44:41 +0000
+Reviewed-on: https://review.openstack.org/373747
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
