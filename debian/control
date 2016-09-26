@@ -42,8 +42,8 @@ Build-Depends-Indep: alembic (>= 0.8.4),
                      python-testresources,
                      python-testscenarios,
 Standards-Version: 3.9.7
-Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-ironic-inspector
-Vcs-Git: https://git.openstack.org/openstack/deb-ironic-inspector
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-ironic-inspector?h=debian%2Fnewton
+Vcs-Git: https://git.openstack.org/openstack/deb-ironic-inspector -b debian/newton
 Homepage: https://github.com/openstack/ironic-inspector
 
 Package: python-ironic-inspector
