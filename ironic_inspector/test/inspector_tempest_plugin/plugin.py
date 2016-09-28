@@ -13,6 +13,7 @@
 
 import os
 
+from oslo_config import cfg
 from tempest import config as tempest_config
 from tempest.test_discover import plugins
 
@@ -29,9 +30,18 @@ class InspectorTempestPlugin(plugins.TempestPlugin):
 
     def register_opts(self, conf):
         tempest_config.register_opt_group(
+            conf, config.service_available_group,
+            config.ServiceAvailableGroup)
+        tempest_config.register_opt_group(
             conf, config.baremetal_introspection_group,
             config.BaremetalIntrospectionGroup)
+        # FIXME(dtantsur): pretend like Neutron does not exist due to random
+        # failures, see https://bugs.launchpad.net/bugs/1621791.
+        cfg.CONF.set_override('neutron', False, 'service_available')
 
     def get_opt_lists(self):
-        return [(config.baremetal_introspection_group.name,
-                 config.BaremetalIntrospectionGroup)]
+        return [
+            (config.baremetal_introspection_group.name,
+             config.BaremetalIntrospectionGroup),
+            ('service_available', config.ServiceAvailableGroup)
+        ]

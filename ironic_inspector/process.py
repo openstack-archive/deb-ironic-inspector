@@ -92,6 +92,11 @@ def _find_node_info(introspection_data, failures):
         if not_found_hook is None:
             failures.append(_('Look up error: %s') % exc)
             return
+
+        LOG.debug('Running node_not_found_hook %s',
+                  CONF.processing.node_not_found_hook,
+                  data=introspection_data)
+
         # NOTE(sambetts): If not_found_hook is not none it means that we were
         # unable to find the node in the node cache and there is a node not
         # found hook defined so we should try to send the introspection data
@@ -110,6 +115,8 @@ def _find_node_info(introspection_data, failures):
 def _run_pre_hooks(introspection_data, failures):
     hooks = plugins_base.processing_hooks_manager()
     for hook_ext in hooks:
+        LOG.debug('Running pre-processing hook %s', hook_ext.name,
+                  data=introspection_data)
         # NOTE(dtantsur): catch exceptions, so that we have changes to update
         # node introspection status after look up
         try:
@@ -251,6 +258,8 @@ def _run_post_hooks(node_info, introspection_data):
     hooks = plugins_base.processing_hooks_manager()
 
     for hook_ext in hooks:
+        LOG.debug('Running post-processing hook %s', hook_ext.name,
+                  node_info=node_info, data=introspection_data)
         hook_ext.obj.before_update(introspection_data, node_info)
 
 
@@ -376,11 +385,14 @@ def _reapply(node_info):
     # runs in background
     try:
         introspection_data = _get_unprocessed_data(node_info.uuid)
-    except Exception:
+    except Exception as exc:
         LOG.exception(_LE('Encountered exception while fetching '
                           'stored introspection data'),
                       node_info=node_info)
-        node_info.release_lock()
+        msg = (_('Unexpected exception %(exc_class)s while fetching '
+                 'unprocessed introspection data from Swift: %(error)s') %
+               {'exc_class': exc.__class__.__name__, 'error': exc})
+        node_info.finished(error=msg)
         return
 
     failures = []

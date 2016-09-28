@@ -18,7 +18,7 @@ IRONIC_INSPECTOR_URI="http://$IRONIC_INSPECTOR_HOST:$IRONIC_INSPECTOR_PORT"
 IRONIC_INSPECTOR_BUILD_RAMDISK=$(trueorfalse False IRONIC_INSPECTOR_BUILD_RAMDISK)
 IRONIC_AGENT_KERNEL_URL=${IRONIC_AGENT_KERNEL_URL:-http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe.vmlinuz}
 IRONIC_AGENT_RAMDISK_URL=${IRONIC_AGENT_RAMDISK_URL:-http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe_image-oem.cpio.gz}
-IRONIC_INSPECTOR_COLLECTORS=${IRONIC_INSPECTOR_COLLECTORS:-default,logs}
+IRONIC_INSPECTOR_COLLECTORS=${IRONIC_INSPECTOR_COLLECTORS:-default,logs,pci-devices}
 IRONIC_INSPECTOR_RAMDISK_LOGDIR=${IRONIC_INSPECTOR_RAMDISK_LOGDIR:-$IRONIC_INSPECTOR_DATA_DIR/ramdisk-logs}
 IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS=${IRONIC_INSPECTOR_ALWAYS_STORE_RAMDISK_LOGS:-True}
 IRONIC_INSPECTOR_TIMEOUT=${IRONIC_INSPECTOR_TIMEOUT:-600}
@@ -327,6 +327,13 @@ elif [[ "$1" == "stack" && "$2" == "extra" ]]; then
         start_inspector_dhcp
     fi
     start_inspector
+elif [[ "$1" == "stack" && "$2" == "test-config" ]]; then
+    if is_service_enabled tempest; then
+        echo_summary "Configuring Tempest for Ironic Inspector"
+        if [ -n "$IRONIC_INSPECTOR_NODE_NOT_FOUND_HOOK" ]; then
+            iniset $TEMPEST_CONFIG baremetal_introspection auto_discovery_feature True
+        fi
+    fi
 fi
 
 if [[ "$1" == "unstack" ]]; then
