@@ -1,4 +1,4 @@
-ironic-inspector (4.2.0-1) UNRELEASED; urgency=medium
+ironic-inspector (4.2.0-1) unstable; urgency=medium
 
   [ Ondřej Nový ]
   * d/s/options: extend-diff-ignore of .gitreview
@@ -6,6 +6,7 @@ ironic-inspector (4.2.0-1) UNRELEASED; urgency=medium
 
   [ Thomas Goirand ]
   * New upstream release.
+  * Uploading to unstable.
   * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Sep 2016 09:51:51 +0200
