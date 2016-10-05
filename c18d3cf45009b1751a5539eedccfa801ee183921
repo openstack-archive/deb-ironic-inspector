@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Bob Fournier <bfournie@redhat.com>
+Code-Review+2: Milan Kováčik <mkovacik@redhat.com>
+Workflow+1: Milan Kováčik <mkovacik@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Oct 2016 10:33:34 +0000
+Reviewed-on: https://review.openstack.org/379614
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
