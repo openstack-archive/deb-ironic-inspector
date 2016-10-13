@@ -1,0 +1,9 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 11 Oct 2016 20:34:24 +0000
+Reviewed-on: https://review.openstack.org/377201
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
