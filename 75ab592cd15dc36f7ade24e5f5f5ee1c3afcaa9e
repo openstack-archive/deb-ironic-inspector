@@ -1,0 +1,12 @@
+Code-Review+1: Joanna Taryma <joanna.taryma@intel.com>
+Code-Review+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 07 Nov 2016 13:00:39 +0000
+Reviewed-on: https://review.openstack.org/389331
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
