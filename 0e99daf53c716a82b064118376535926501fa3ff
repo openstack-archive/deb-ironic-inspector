@@ -1,0 +1,10 @@
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+2: Milan Kováčik <mkovacik@redhat.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 29 Nov 2016 09:28:05 +0000
+Reviewed-on: https://review.openstack.org/403377
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/newton
