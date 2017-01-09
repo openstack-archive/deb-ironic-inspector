@@ -1,0 +1,10 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Galyna Zholtkevych <gzholtkevych@mirantis.com>
+Code-Review+2: Milan Kováčik <mkovacik@redhat.com>
+Workflow+1: Milan Kováčik <mkovacik@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 06 Jan 2017 13:32:37 +0000
+Reviewed-on: https://review.openstack.org/416935
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
