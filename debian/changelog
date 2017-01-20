@@ -1,9 +1,10 @@
-ironic-inspector (4.2.0-2) UNRELEASED; urgency=medium
+ironic-inspector (4.2.0-2) unstable; urgency=medium
 
   * Bumped debhelper compat version to 10
   * Added lsb-base to depends
+  * Patch-out upper constraints of SQLAlchemy
 
- -- Ondřej Nový <onovy@debian.org>  Wed, 23 Nov 2016 23:58:49 +0100
+ -- Ondřej Nový <onovy@debian.org>  Fri, 20 Jan 2017 11:34:27 +0100
 
 ironic-inspector (4.2.0-1) unstable; urgency=medium
 

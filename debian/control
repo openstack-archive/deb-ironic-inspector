@@ -91,7 +91,7 @@ Package: ironic-inspector
 Architecture: all
 Depends: adduser,
          python-ironic-inspector (= ${binary:Version}),
-         lsb-base,
+         ${ostack-lsb-base},
          ${misc:Depends},
          ${python:Depends},
 Description: discovering hardware properties for OpenStack Ironic - Daemon

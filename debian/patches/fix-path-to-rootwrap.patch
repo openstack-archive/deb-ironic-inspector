@@ -3,11 +3,9 @@ Author: Thomas Goirand <zigo@debian.org>
 Forwarded: no
 Last-Update: 2015-10-30
 
-Index: deb-ironic-inspector/ironic_inspector/firewall.py
-===================================================================
---- deb-ironic-inspector.orig/ironic_inspector/firewall.py
-+++ deb-ironic-inspector/ironic_inspector/firewall.py
-@@ -66,7 +66,7 @@ def init():
+--- a/ironic_inspector/firewall.py
++++ b/ironic_inspector/firewall.py
+@@ -67,7 +67,7 @@
      INTERFACE = CONF.firewall.dnsmasq_interface
      CHAIN = CONF.firewall.firewall_chain
      NEW_CHAIN = CHAIN + '_temp'
@@ -16,11 +14,9 @@ Index: deb-ironic-inspector/ironic_inspector/firewall.py
                      CONF.rootwrap_config, 'iptables',)
  
      # -w flag makes iptables wait for xtables lock, but it's not supported
-Index: deb-ironic-inspector/ironic_inspector/test/unit/test_firewall.py
-===================================================================
---- deb-ironic-inspector.orig/ironic_inspector/test/unit/test_firewall.py
-+++ deb-ironic-inspector/ironic_inspector/test/unit/test_firewall.py
-@@ -54,7 +54,7 @@ class TestFirewall(test_base.NodeTest):
+--- a/ironic_inspector/test/unit/test_firewall.py
++++ b/ironic_inspector/test/unit/test_firewall.py
+@@ -54,7 +54,7 @@
          for (args, call) in zip(init_expected_args, call_args_list):
              self.assertEqual(args, call[0])
  
@@ -29,7 +25,7 @@ Index: deb-ironic-inspector/ironic_inspector/test/unit/test_firewall.py
                      'iptables', '-w')
          self.assertEqual(expected, firewall.BASE_COMMAND)
  
-@@ -76,7 +76,7 @@ class TestFirewall(test_base.NodeTest):
+@@ -76,7 +76,7 @@
          for (args, call) in zip(init_expected_args, call_args_list):
              self.assertEqual(args, call[0])
  
