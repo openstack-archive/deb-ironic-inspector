@@ -1,5 +1,6 @@
 ironic-inspector (4.2.0-2) unstable; urgency=medium
 
+  * Team upload.
   * Bumped debhelper compat version to 10
   * Added lsb-base to depends
   * Patch-out upper constraints of SQLAlchemy
