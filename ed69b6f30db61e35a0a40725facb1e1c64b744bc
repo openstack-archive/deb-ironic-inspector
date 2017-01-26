@@ -1,0 +1,9 @@
+Code-Review+2: Milan Kováčik <mkovacik@redhat.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 26 Jan 2017 14:05:57 +0000
+Reviewed-on: https://review.openstack.org/421909
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/newton

@@ -1,0 +1,9 @@
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 26 Jan 2017 12:14:33 +0000
+Reviewed-on: https://review.openstack.org/425066
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/newton
