@@ -1,0 +1,11 @@
+Code-Review+1: Annie Lezil <annie.lezil@gmail.com>
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 31 Jan 2017 02:12:42 +0000
+Reviewed-on: https://review.openstack.org/425700
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
