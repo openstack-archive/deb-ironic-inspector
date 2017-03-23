@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Milan Kováčik <mkovacik@redhat.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Mar 2017 20:08:25 +0000
+Reviewed-on: https://review.openstack.org/437853
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/stable/ocata
