@@ -1,0 +1,9 @@
+Code-Review+2: Milan Kováčik <mkovacik@redhat.com>
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Workflow+1: Milan Kováčik <mkovacik@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 25 Apr 2017 16:32:34 +0000
+Reviewed-on: https://review.openstack.org/454724
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
