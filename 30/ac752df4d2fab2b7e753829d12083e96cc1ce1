@@ -1,0 +1,9 @@
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 26 May 2017 13:40:05 +0000
+Reviewed-on: https://review.openstack.org/468240
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
