@@ -1,0 +1,10 @@
+Code-Review+1: Nisha Agarwal <agarwalnisha1980@gmail.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Anton Arefiev <aarefiev@mirantis.com>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 19 Jul 2017 20:43:54 +0000
+Reviewed-on: https://review.openstack.org/480185
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
