@@ -1,0 +1,9 @@
+Code-Review+2: Milan Kováčik <mkovacik@redhat.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 25 Jul 2017 16:02:18 +0000
+Reviewed-on: https://review.openstack.org/480251
+Project: openstack/deb-ironic-inspector
+Branch: refs/heads/master
