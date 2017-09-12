@@ -1,4 +1,0 @@
----
-deprecations:
-  - The rollback actions for introspection rules are deprecated. No in-tree
-    actions are using them, 3rdpart should stop using them as soon as possible.

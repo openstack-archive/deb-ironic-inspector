@@ -1,4 +1,0 @@
----
-fixes:
-  - Fixed a regression in the firewall code, which causes re-running
-    introspection for an already inspected node to fail.

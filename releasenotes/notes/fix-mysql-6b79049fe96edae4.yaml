@@ -1,8 +1,0 @@
----
-critical:
-  - |
-    Fixed several issues with MySQL database support:
-
-    * https://bugs.launchpad.net/bugs/1501746
-    * https://bugs.launchpad.net/bugs/1506160
-    * https://bugs.launchpad.net/bugs/1501746

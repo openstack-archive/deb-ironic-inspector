@@ -1,3 +1,0 @@
-fixes:
-  - Set the node to the error state when it
-    failed get data from swift.

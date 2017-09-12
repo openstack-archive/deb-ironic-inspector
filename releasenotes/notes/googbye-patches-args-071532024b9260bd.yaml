@@ -1,4 +1,0 @@
----
-upgrade:
-  - Removed deprecated support for passing "node_patches" and "ports_patches"
-    arguments to processing hooks.

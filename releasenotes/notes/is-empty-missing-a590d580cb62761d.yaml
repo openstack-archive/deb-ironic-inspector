@@ -1,3 +1,0 @@
----
-fixes:
-  - Fixed the "is-empty" condition to return True on missing values.

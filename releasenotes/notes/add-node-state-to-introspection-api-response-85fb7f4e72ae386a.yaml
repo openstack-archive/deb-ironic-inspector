@@ -1,4 +1,0 @@
----
-features:
-  - Adds node state to the GET /v1/introspection/<node UUID or name> and
-    GET /v1/introspection API response data.

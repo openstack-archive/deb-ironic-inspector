@@ -1,6 +1,0 @@
----
-features:
-  - |
-    Processing hooks can now define dependencies on other processing hooks.
-    **ironic-inspector** start up fails when required hooks are not enabled
-    before the hook that requires them.

@@ -1,3 +1,0 @@
----
-fixes:
-  - Only issue iptables calls when list of active MAC's changes.

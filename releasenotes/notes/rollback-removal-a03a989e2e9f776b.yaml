@@ -1,4 +1,0 @@
----
-upgrade:
-  - |
-    Support for rollback actions in introspection rules was removed.

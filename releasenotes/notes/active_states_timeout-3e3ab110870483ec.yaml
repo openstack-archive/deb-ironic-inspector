@@ -1,4 +1,0 @@
----
-other:
-  - |
-    Allow a timeout to happen while a node inspection is in any active state.

@@ -1,5 +1,0 @@
----
-features:
-  - |
-   Avoid failing introspection on diskless nodes. The node property ``local_gb
-   == 0`` is set in that case.

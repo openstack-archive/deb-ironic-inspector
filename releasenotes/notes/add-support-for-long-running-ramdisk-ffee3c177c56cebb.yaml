@@ -1,4 +1,0 @@
----
-features:
-  - Add configuration option `processing.power_off` defaulting to True,
-    which allows to leave nodes powered on after introspection.

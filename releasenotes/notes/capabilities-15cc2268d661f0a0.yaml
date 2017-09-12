@@ -1,4 +1,0 @@
----
-features:
-  - Added a new "capabilities" processing hook detecting the CPU and boot mode
-    capabilities (the latter disabled by default).

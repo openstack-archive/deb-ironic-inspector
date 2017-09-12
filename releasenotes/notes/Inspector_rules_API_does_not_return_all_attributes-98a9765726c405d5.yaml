@@ -1,5 +1,0 @@
----
-features:
-    - |
-     Querying **inspector** rules API now also returns the ``invert`` and
-     ``multiple`` attributes of the associated conditions.

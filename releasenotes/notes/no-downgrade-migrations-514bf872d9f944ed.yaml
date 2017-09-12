@@ -1,5 +1,0 @@
----
-features:
-  - Database migrations downgrade was removed. More info about
-    database migration/rollback could be found here
-    http://docs.openstack.org/openstack-ops/content/ops_upgrades-roll-back.html

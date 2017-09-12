@@ -1,5 +1,0 @@
----
-features:
-  - |
-    Add ``disabled`` option to add_ports, so discovered nodes can be created
-    without create ports.

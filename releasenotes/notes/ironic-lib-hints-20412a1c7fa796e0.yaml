@@ -1,6 +1,0 @@
----
-features:
-  - Adds support for using operators with the root device hints mechanism.
-    The supported operators are ``=``, ``==``, ``!=``, ``>=``,
-    ``<=``, ``>``, ``<``, ``s==``, ``s!=``, ``s>=``, ``s>``,
-    ``s<=``, ``s<``, ``<in>``, ``<all-in>`` and ``<or>``.

@@ -1,3 +1,0 @@
----
-fixes:
-  - LLC hook no longer assumes all inspected ports are added to ironic
